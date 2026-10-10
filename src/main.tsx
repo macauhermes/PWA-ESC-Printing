@@ -337,8 +337,8 @@ function App() {
   }
 
   const tabs = useMemo(() => {
-    const base: [string,string][] = [['printer', '藍牙打印'], ['events', '事件管理'], ['manual-event', '手動新增事件'], ['jobs', '工作排程'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']];
-    if (user?.role === 'admin') base.push(['admin', '管理後台']);
+    const base: [string,string][] = [['printer', '藍牙打印'], ['events', '事件管理'], ['manual-event', '手動新增事件'], ['jobs', '工作排程']];
+    if (user?.role === 'admin') base.push(['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄'], ['admin', '管理後台']);
     return base;
   }, [user?.role]);
   if (!user) return <main className="auth-shell"><section className="panel auth-panel"><div className="brand">ESC <span>PRINTING</span></div><h1>PWA ESC Printing</h1><p className="muted">以 Passkey 安全登入，管理打印機、事件及記錄。</p><label>使用者名稱<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" placeholder="例如：operator01" /></label><label>顯示名稱（首次註冊）<input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="操作人員" /></label><div className="actions"><button disabled={busy || !username} onClick={login}>{busy ? '處理中…' : 'Passkey 登入'}</button><button className="secondary" disabled={busy || !username} onClick={register}>註冊 Passkey</button></div><p className="hint">首次使用請先註冊 Passkey。生產環境請關閉公開註冊並改用邀請或管理員建立帳戶。</p>{message && <p className="notice">{message}</p>}</section></main>;

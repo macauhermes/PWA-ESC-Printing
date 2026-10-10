@@ -21,6 +21,35 @@ const b64url = (s: string) => s.replace(/-/g, '+').replace(/_/g, '/') + '='.repe
 const b64 = (s: string) => Uint8Array.from(atob(b64url(s)), c => c.charCodeAt(0));
 const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, b => String.fromCharCode(b)).join(''));
 const id = () => crypto.randomUUID();
+type SavedPrinter = { id: string; name: string; savedAt: string };
+function printerStore(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('esc-printing-local', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('preferences', { keyPath: 'id' });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function savePrinterLocally(value: SavedPrinter) {
+  const db = await printerStore();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('preferences', 'readwrite');
+    tx.objectStore('preferences').put(value);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+}
+async function loadPrinterLocally(): Promise<SavedPrinter | null> {
+  const db = await printerStore();
+  const value = await new Promise<SavedPrinter | null>((resolve, reject) => {
+    const request = db.transaction('preferences', 'readonly').objectStore('preferences').get('selected-printer');
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+  db.close();
+  return value;
+}
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem('esc-token') || '');
@@ -48,6 +77,16 @@ function App() {
   useEffect(() => {
     if (!token || !user) return;
     api('/printer-preference', token).then(setSavedPrinter).catch(() => {});
+    loadPrinterLocally().then(async saved => {
+      if (!saved) return;
+      setSavedPrinter({ device_id: saved.id, device_name: saved.name });
+      const bluetooth = (navigator as any).bluetooth;
+      if (bluetooth?.getDevices) {
+        const devices: BluetoothDevice[] = await bluetooth.getDevices();
+        const device = devices.find(d => d.id === saved.id);
+        if (device) setPrinter({ id: device.id, name: device.name || saved.name, device });
+      }
+    }).catch(() => {});
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, [token, user]);
   useEffect(() => {
@@ -91,6 +130,7 @@ function App() {
       const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', '0000ff00-0000-1000-8000-00805f9b34fb', '0000ae00-0000-1000-8000-00805f9b34fb'] });
       const selected: Printer = { id: device.id, name: device.name || 'BLE Thermal Printer', device };
       setPrinter(selected);
+      await savePrinterLocally({ id: device.id, name: selected.name, savedAt: new Date().toISOString() });
       await api('/printer-preference', token, { method: 'POST', body: JSON.stringify({ deviceId: device.id, deviceName: selected.name }) });
       setSavedPrinter({ device_id: device.id, device_name: selected.name });
       device.addEventListener('gattserverdisconnected', () => setMessage('打印機已斷線；可重新連接。'));

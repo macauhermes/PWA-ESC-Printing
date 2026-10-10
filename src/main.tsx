@@ -11,6 +11,7 @@ type AdminClient = { clientId:string; userId:string; username:string; online:num
 type AdminUser = { id:string; username:string; displayName:string; role:string; createdAt:string; passkeyCount:number; activeSessions:number; lastLogin?:string };
 type AdminOperation = { id:number; username?:string; action:string; entity_type?:string; entity_id?:string; detail?:string; created_at:string };
 type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; operations:AdminOperation[]; jobs:Job[]; serverTime:string };
+type NotificationItem = { id:string; title:string; body:string; targetClientId?:string|null; createdAt:string; isRead:number; readAt?:string };
 
 const api = async (path: string, token: string, init: RequestInit = {}) => {
   const headers = new Headers(init.headers || {});
@@ -89,6 +90,10 @@ function App() {
   const [adminWorkDetail, setAdminWorkDetail] = useState('');
   const [adminOpTitle, setAdminOpTitle] = useState('');
   const [adminOpContent, setAdminOpContent] = useState('');
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationTitle, setNotificationTitle] = useState('');
+  const [notificationBody, setNotificationBody] = useState('');
+  const [notificationTarget, setNotificationTarget] = useState('');
 
   useEffect(() => { if (token) api('/me', token).then((x) => setUser(x.user)).catch(() => { localStorage.removeItem('esc-token'); setToken(''); setUser(null); }); }, [token]);
   useEffect(() => {

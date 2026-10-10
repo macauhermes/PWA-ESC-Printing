@@ -152,6 +152,7 @@ function App() {
       }
       if (!writable) throw new Error('找不到可寫入的 BLE characteristic。此打印機可能使用廠商專用 BLE 服務或不是 BLE GATT 打印機。');
       setPrinter({ ...printer, characteristic: writable });
+      await api('/printer-action', token, { method: 'POST', body: JSON.stringify({ action: 'connected', deviceId: printer.id, deviceName: printer.name }) });
       setMessage(`已連接 ${printer.name}，找到可寫入的 characteristic。`);
     } catch (e) { setMessage(e instanceof Error ? e.message : '連接失敗'); }
     finally { setBusy(false); }

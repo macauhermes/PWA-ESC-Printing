@@ -222,4 +222,8 @@ app.post('/api/receipt/print-log', auth, (req: any, res) => {
   audit(req.user, 'receipt.print_requested', 'receipt', undefined, { printerName: String(req.body.printerName || ''), receiptType: 'test', status: String(req.body.status || 'submitted') });
   res.json({ ok: true });
 });
-\napp.listen(port, () => console.log(`PWA ESC Printing API listening on :${port}`));
+\nif (fs.existsSync(path.resolve('dist'))) {
+  app.use(express.static(path.resolve('dist')));
+  app.get(/^(?!\/api(?:\/|$)|\/uploads(?:\/|$)).*/, (_req, res) => res.sendFile(path.resolve('dist/index.html')));
+}
+app.listen(port, () => console.log(`PWA ESC Printing API listening on :${port}`));

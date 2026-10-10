@@ -235,7 +235,9 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     c.user_agent AS userAgent,c.last_seen AS lastSeen FROM client_status c ORDER BY c.last_seen DESC`).all();
   const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();
   const jobs = db.prepare('SELECT * FROM daily_jobs ORDER BY created_at DESC LIMIT 200').all();
-  res.json({ users, clients, operations, jobs, serverTime: new Date().toISOString() });
+  const deviceWork = db.prepare(`SELECT w.id,w.client_id AS clientId,w.user_id AS userId,w.username,w.title,w.content,w.event_date AS eventDate,w.created_at AS createdAt,c.printer_name AS printerName
+    FROM client_work w LEFT JOIN client_status c ON c.client_id=w.client_id ORDER BY w.created_at DESC LIMIT 1000`).all();
+  res.json({ users, clients, operations, jobs, deviceWork, serverTime: new Date().toISOString() });
 });
 app.post('/api/admin/users/:id/role', auth, requireAdmin, (req: any, res) => {
   const role = String(req.body.role || '');
@@ -318,6 +320,27 @@ const storage = multer.diskStorage({
   filename: (_req, file, cb) => cb(null, crypto.randomUUID() + path.extname(file.originalname).slice(0, 12))
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024, files: 20 }, fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) });
+// Mobile clients may keep work locally and upload it only when requested.
+app.get('/api/work', auth, (req: any, res) => {
+  const clientId = String(req.user.client_id || '').slice(0, 128);
+  if (!clientId) return res.json([]);
+  const rows = db.prepare('SELECT id,client_id AS clientId,title,content,event_date AS eventDate,created_at AS createdAt FROM client_work WHERE client_id=? ORDER BY created_at DESC LIMIT 500').all(clientId);
+  res.json(rows);
+});
+app.post('/api/work', auth, (req: any, res) => {
+  const clientId = String(req.user.client_id || '').slice(0, 128);
+  const title = String(req.body.title || '').trim().slice(0, 200);
+  const content = String(req.body.content || '').trim().slice(0, 10000);
+  const eventDate = String(req.body.eventDate || '').trim().slice(0, 40) || null;
+  if (!clientId) return res.status(409).json({ error: '客戶端尚未初始化，請稍後再試' });
+  if (!title) return res.status(400).json({ error: '事件標題不可為空' });
+  const workId = id();
+  db.prepare('INSERT INTO client_work(id,client_id,user_id,username,title,content,event_date) VALUES(?,?,?,?,?,?,?)')
+    .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate);
+  audit(req.user, 'client.work_uploaded', 'client_work', workId, { clientId, title });
+  res.status(201).json({ id: workId, clientId, title, content, eventDate, createdAt: new Date().toISOString() });
+});
+
 app.get('/api/events', auth, (req: any, res) => {
   const events = db.prepare('SELECT * FROM events ORDER BY COALESCE(event_date,created_at) DESC').all() as any[];
   const media = db.prepare('SELECT * FROM media ORDER BY created_at').all() as any[];
@@ -341,7 +364,7 @@ app.delete('/api/events/:id', auth, (req: any, res) => {
 });
 app.post('/api/records/clear', auth, requireAdmin, (req: any, res) => {
   const requested = Array.isArray(req.body.categories) ? req.body.categories.map(String) : [];
-  const allowed = new Set(['events', 'jobs', 'logins', 'printer_preferences', 'push_subscriptions']);
+  const allowed = new Set(['events', 'jobs', 'work', 'logins', 'printer_preferences', 'push_subscriptions']);
   const invalid = requested.filter((c: string) => !allowed.has(c));
   if (invalid.length) return res.status(400).json({ error: `Unsupported record categories: ${invalid.join(', ')}` });
   const counts: Record<string, number> = {};
@@ -364,6 +387,9 @@ app.post('/api/records/clear', auth, requireAdmin, (req: any, res) => {
         counts.events = eventCount; counts.media = mediaCount;
       } else if (category === 'jobs') {
         counts.jobs = (db.prepare('SELECT COUNT(*) AS n FROM daily_jobs').get() as any).n; db.prepare('DELETE FROM daily_jobs').run();
+      } else if (category === 'work') {
+        counts.work = (db.prepare('SELECT COUNT(*) AS n FROM client_work').get() as any).n;
+        db.prepare('DELETE FROM client_work').run();
       } else if (category === 'logins') {
         counts.logins = (db.prepare('SELECT COUNT(*) AS n FROM login_events').get() as any).n;
         db.prepare('DELETE FROM login_events').run();

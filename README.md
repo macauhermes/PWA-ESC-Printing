@@ -78,7 +78,7 @@ npm start
 
 ## Docker Compose 部署
 
-Docker 映像使用 Node.js 26.11，建置 Vite 前端及 Express API，容器內 API 監聽 `8787`（不是 Next.js 的 `3000`）。SQLite 與上傳檔案使用 Docker named volumes，容器重建後仍會保留。
+Docker 映像使用 Node.js 26.11，建置 Vite 前端及 Express API，容器內 API 監聽 `8787`（不是 Next.js 的 `3000`）。SQLite 與上傳檔案使用相對於 `docker-compose.yml` 的主機目錄 `./app-data` 和 `./app-uploads`，不再存放於 Docker 預設 named-volume 空間；容器重建後，資料仍保留在專案目錄內。
 
 首次部署前，請在專案目錄執行：
 
@@ -96,6 +96,23 @@ docker network ls
 docker network create db_default
 ```
 
+建立與 `docker-compose.yml` 同層的資料目錄（請確保 Docker 執行帳號對這些目錄有讀寫權限）：
+
+```bash
+mkdir -p ./app-data ./app-uploads
+```
+
+**若是從舊版 named volumes 升級，請先備份並把舊 volume 內容複製到這兩個目錄，再啟動新版 Compose。** 否則新掛載的空目錄會遮蔽舊 volume 中的資料，應用程式會看不到原有 SQLite 與上傳檔案。先用 `docker volume ls` 找出舊 volume 的實際名稱（通常是 `<Compose專案名>_app-data` 和 `<Compose專案名>_app-uploads`），並在停止應用程式後複製，例如把下列佔位名稱換成實際名稱：
+
+```bash
+docker compose down
+# 請替換為 docker volume ls 顯示的實際 volume 名稱
+DATA_VOLUME=<舊的_app-data_volume名稱>
+UPLOADS_VOLUME=<舊的_app-uploads_volume名稱>
+docker run --rm -v "${DATA_VOLUME}:/from:ro" -v "$PWD/app-data:/to" alpine sh -c 'cp -a /from/. /to/'
+docker run --rm -v "${UPLOADS_VOLUME}:/from:ro" -v "$PWD/app-uploads:/to" alpine sh -c 'cp -a /from/. /to/'
+```
+
 啟動與檢查：
 
 ```bash
@@ -105,7 +122,7 @@ docker compose ps
 docker compose logs --tail=200 app
 ```
 
-健康檢查端點為容器內的 `http://127.0.0.1:8787/api/health`。若使用不同網域，請同步修改 `docker-compose.yml` 的 `APP_ORIGIN`、`RP_ID`、`VIRTUAL_HOST`、`LETSENCRYPT_HOST` 和電郵設定。Passkey/WebAuthn 的 `APP_ORIGIN` 必須與使用者實際開啟的 HTTPS 網址一致。不要刪除 `app-data` 或 `app-uploads` volumes，否則會失去持久化資料。
+健康檢查端點為容器內的 `http://127.0.0.1:8787/api/health`。若使用不同網域，請同步修改 `docker-compose.yml` 的 `APP_ORIGIN`、`RP_ID`、`VIRTUAL_HOST`、`LETSENCRYPT_HOST` 和電郵設定。Passkey/WebAuthn 的 `APP_ORIGIN` 必須與使用者實際開啟的 HTTPS 網址一致。不要刪除同層的 `./app-data` 或 `./app-uploads` 目錄，否則會失去持久化資料。
 
 ## 限制及後續工作
 

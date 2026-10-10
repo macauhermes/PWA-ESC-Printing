@@ -121,6 +121,25 @@ function App() {
 
   useEffect(() => {
     if (!token || !user) return;
+    let active = true;
+    const refreshNotifications = async () => {
+      try {
+        const rows = await api('/notifications', token);
+        if (active) setNotifications(rows);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (msg.includes('401') || msg.includes('Session expired') || msg.includes('Authentication required')) {
+          localStorage.removeItem('esc-token'); setToken(''); setUser(null); setTab('printer');
+        }
+      }
+    };
+    void refreshNotifications();
+    const timer = window.setInterval(refreshNotifications, 3000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [token, user, clientId]);
+
+  useEffect(() => {
+    if (!token || !user) return;
     const report = async () => {
       try {
         await api('/client/heartbeat', token, { method: 'POST', body: JSON.stringify({

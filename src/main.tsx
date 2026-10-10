@@ -291,7 +291,7 @@ function App() {
   }
   async function logout() {
     try { if (token) await api('/auth/logout', token, { method: 'POST' }); } catch {}
-    localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null); setTab('printer'); setMessage('已登出');
+    localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null); setTab('print'); setMessage('已登出');
   }
 
   async function scanPrinter() {

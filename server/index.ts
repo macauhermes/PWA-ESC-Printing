@@ -6,7 +6,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import multer from 'multer';
 import cron from 'node-cron';
-import webpush from 'web-push';\nimport iconvLite from 'iconv-lite';
+import webpush from 'web-push';
+import iconvLite from 'iconv-lite';
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 import type { AuthenticationResponseJSON, RegistrationResponseJSON, WebAuthnCredential } from '@simplewebauthn/server';
 import { db } from './db.js';
@@ -208,7 +209,8 @@ app.post('/api/push/test', auth, async (req: any, res) => {
   res.json({ sent: result.filter(r => r.status === 'fulfilled').length, total: subs.length });
 });
 
-const requireIconv = () => iconvLite;\n
+const requireIconv = () => iconvLite;
+
 app.post('/api/receipt/encode', auth, (req: any, res) => {
   const iconv = requireIconv();
   const text = String(req.body.text || '');
@@ -222,7 +224,8 @@ app.post('/api/receipt/print-log', auth, (req: any, res) => {
   audit(req.user, 'receipt.print_requested', 'receipt', undefined, { printerName: String(req.body.printerName || ''), receiptType: 'test', status: String(req.body.status || 'submitted') });
   res.json({ ok: true });
 });
-\nif (fs.existsSync(path.resolve('dist'))) {
+
+if (fs.existsSync(path.resolve('dist'))) {
   app.use(express.static(path.resolve('dist')));
   app.get(/^(?!\/api(?:\/|$)|\/uploads(?:\/|$)).*/, (_req, res) => res.sendFile(path.resolve('dist/index.html')));
 }

@@ -37,9 +37,10 @@ npm run dev
 
 - Vite 前端：`http://localhost:5173`
 - API：`http://localhost:8787`
-- 預設允許自行註冊 Passkey。首次在登入頁輸入 3–40 字元使用者名稱及顯示名稱，按「註冊 Passkey」，完成裝置生物辨識/安全金鑰流程，再使用同一使用者名稱登入。
-- `ADMIN_USERNAMES=admin,supervisor` 可指定管理員帳戶。首次使用時，先讓指定帳戶註冊 Passkey；伺服器會將這些帳戶設為管理員。現有帳戶會在服務啟動時同步角色。
-- `ALLOW_SELF_REGISTRATION=false` 可關閉公開註冊；目前沒有管理員邀請 UI，生產環境需另外建立受控帳戶開通流程。
+- 預設允許自行註冊 Passkey。一般用戶在登入頁輸入 3–40 字元使用者名稱及顯示名稱，按「註冊 Passkey」，完成裝置生物辨識/安全金鑰流程，再使用同一使用者名稱登入。
+- 一般用戶可公開註冊 Passkey，不需要管理員預先建立帳戶。
+- 唯一管理員使用 `.env` 中的 `ADMIN_USERNAME` 與 `ADMIN_PASSWORD` 固定帳密，僅桌面版顯示管理員登入選項；管理 API 也會拒絕以 Passkey 登入的管理員工作階段及常見手機 User-Agent。
+- 請務必把範例 `ADMIN_PASSWORD` 換成高強度唯一密碼。管理員帳號不能透過公開 Passkey 註冊建立，其他一般用戶不能自行升級為管理員。
 
 ## WebAuthn 設定
 
@@ -48,6 +49,7 @@ npm run dev
 - `APP_ORIGIN`: 使用者實際開啟的 HTTPS 網址，包含正確的 scheme/host/port。
 - `RP_ID`: 該網站網域名稱，不包含 scheme 或 port。
 - `SESSION_SECRET`: 請設為高熵隨機值（目前 session token 使用 SHA-256 雜湊存入 DB）。
+- `ADMIN_USERNAME` 與 `ADMIN_PASSWORD`: 唯一管理員的固定登入憑證，僅放在伺服器環境變數，不要放入前端程式或提交真實 `.env` 到 GitHub。
 - 設定反向代理 HTTPS、備份 SQLite 及 uploads，限制管理端點的網路存取。
 
 登入事件可在「登入記錄」查看。操作紀錄在「操作稽核」查看。管理員登入後會看到「管理後台」頁，可管理註冊用戶、監視每個客戶端的在線狀態、打印機名稱及 Bluetooth/GATT 連接狀態，並強制撤銷指定客戶端的登入工作階段。客戶端以 3 秒心跳回報狀態；被強制登出的客戶端最遲於下一次心跳時清除本機登入狀態。管理員亦可新增／刪除操作記錄與工作記錄。為保留追溯性，刪除操作本身會另寫入稽核記錄。日誌應避免存入密碼、Passkey 私密材料或不必要的敏感內容。

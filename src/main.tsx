@@ -124,7 +124,7 @@ function App() {
   const [notificationBody, setNotificationBody] = useState('');
   const [notificationTarget, setNotificationTarget] = useState('');
 
-  useEffect(() => { if (token) api('/me', token).then((x) => setUser(x.user)).catch(() => { localStorage.removeItem('esc-token'); setToken(''); setUser(null); }); }, [token]);
+  useEffect(() => { if (token) api('/me', token).then((x) => { setUser(x.user); if (x.user.role === 'admin') setTab('users'); }).catch(() => { localStorage.removeItem('esc-token'); setToken(''); setUser(null); setTab('print'); }); }, [token]);
   useEffect(() => {
     const query = window.matchMedia('(min-width: 801px)');
     const update = () => { setIsDesktop(query.matches); if (!query.matches) setAdminMode(false); };
@@ -299,6 +299,7 @@ function App() {
     try {
       const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', '0000ff00-0000-1000-8000-00805f9b34fb', '0000ae00-0000-1000-8000-00805f9b34fb'] });
       const selected: Printer = { id: device.id, name: device.name || 'BLE Thermal Printer', device };
+      if (printer?.device.gatt?.connected && printer.device.id !== device.id) printer.device.gatt.disconnect();
       setPrinter(selected);
       await savePrinterLocally({ id: device.id, name: selected.name, savedAt: new Date().toISOString() });
       await api('/printer-preference', token, { method: 'POST', body: JSON.stringify({ deviceId: device.id, deviceName: selected.name }) });

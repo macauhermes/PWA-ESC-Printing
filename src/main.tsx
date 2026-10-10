@@ -10,7 +10,9 @@ type Printer = { id: string; name: string; device: BluetoothDevice; characterist
 type AdminClient = { clientId:string; userId:string; username:string; online:number; bluetoothSupported:number; bluetoothConnected:number; printerConnected:number; printerName?:string; printerId?:string; userAgent?:string; lastSeen:string };
 type AdminUser = { id:string; username:string; displayName:string; role:string; createdAt:string; passkeyCount:number; activeSessions:number; lastLogin?:string };
 type AdminOperation = { id:number; username?:string; action:string; entity_type?:string; entity_id?:string; detail?:string; created_at:string };
-type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; operations:AdminOperation[]; jobs:Job[]; serverTime:string };
+type DeviceWork = { id:string; clientId:string; userId:string; username:string; title:string; content:string; eventDate?:string|null; createdAt:string; printerName?:string|null };
+type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string };
+type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; operations:AdminOperation[]; jobs:Job[]; deviceWork:DeviceWork[]; serverTime:string };
 type NotificationItem = { id:string; title:string; body:string; targetClientId?:string|null; createdAt:string; isRead:number; readAt?:string };
 
 const api = async (path: string, token: string, init: RequestInit = {}) => {
@@ -72,6 +74,11 @@ function App() {
   const [savedPrinter, setSavedPrinter] = useState<any>(null);
   const [codePageIndex, setCodePageIndex] = useState('0');
   const [events, setEvents] = useState<EventItem[]>([]);
+  const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>(() => { try { return JSON.parse(localStorage.getItem('esc-work-drafts') || '[]'); } catch { return []; } });
+  const [uploadedWork, setUploadedWork] = useState<DeviceWork[]>([]);
+  const [workTitle, setWorkTitle] = useState('');
+  const [workContent, setWorkContent] = useState('');
+  const [workDate, setWorkDate] = useState(() => new Date().toISOString().slice(0,16));
   const [jobs, setJobs] = useState<Job[]>([]);
   const [logins, setLogins] = useState<any[]>([]);
   const [audits, setAudits] = useState<any[]>([]);
@@ -122,9 +129,11 @@ function App() {
     }).catch(() => {});
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, [token, user]);
+  useEffect(() => { localStorage.setItem('esc-work-drafts', JSON.stringify(localDrafts)); }, [localDrafts]);
+
   useEffect(() => {
     if (!token || !user) return;
-    if (tab === 'events') api('/events', token).then(setEvents).catch(err => setMessage(err.message));
+    if (tab === 'events') api('/work', token).then(setUploadedWork).catch(err => setMessage(err.message));
     if (tab === 'jobs') api('/jobs', token).then(setJobs).catch(err => setMessage(err.message));
     if (tab === 'logins') api('/logins', token).then(setLogins).catch(err => setMessage(err.message));
     if (tab === 'audit') api('/audit', token).then(setAudits).catch(err => setMessage(err.message));
@@ -332,6 +341,32 @@ function App() {
     finally { setBusy(false); }
   }
 
+  function saveLocalWork(e: React.FormEvent) {
+    e.preventDefault();
+    const title = workTitle.trim();
+    if (!title) { setMessage('請輸入事件標題'); return; }
+    const draft: LocalDraft = { id: crypto.randomUUID(), title, content: workContent.trim(), eventDate: workDate, createdAt: new Date().toISOString() };
+    setLocalDrafts(old => [draft, ...old]);
+    setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16));
+    setMessage('事件已暫存在此手機，尚未上傳系統。');
+  }
+
+  async function uploadLocalWork(draft: LocalDraft) {
+    setBusy(true);
+    try {
+      await api('/work', token, { method:'POST', body:JSON.stringify({ title:draft.title, content:draft.content, eventDate:draft.eventDate }) });
+      setLocalDrafts(old => old.filter(item => item.id !== draft.id));
+      setUploadedWork(await api('/work', token));
+      setMessage('事件已上傳系統，並已從手機暫存清單移除。');
+    } catch (err) { setMessage(err instanceof Error ? err.message : '上傳事件失敗'); }
+    finally { setBusy(false); }
+  }
+  function deleteLocalWork(draftId: string) {
+    if (!window.confirm('確定刪除此手機暫存事件？')) return;
+    setLocalDrafts(old => old.filter(item => item.id !== draftId));
+    setMessage('已刪除手機暫存事件。');
+  }
+
   async function saveEvent(e: React.FormEvent) {
     e.preventDefault(); setBusy(true);
     try {
@@ -401,7 +436,7 @@ function App() {
   }
 
   const tabs = useMemo(() => {
-    const base: [string,string][] = [['printer', '藍牙打印'], ['notifications', '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')], ['events', '事件管理'], ['manual-event', '手動新增事件'], ['jobs', '工作排程']];
+    const base: [string,string][] = [['printer', '藍牙打印'], ['notifications', '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')], ['events', '事件管理']];
     if (user?.role === 'admin') base.push(['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄'], ['admin', '管理後台']);
     return base;
   }, [user?.role, notifications]);
@@ -416,8 +451,16 @@ function App() {
       {message && <div className="notice" role="status">{message}<button className="notice-close" onClick={() => setMessage('')}>×</button></div>}
       {tab === 'printer' && <section className="grid two"><article className="panel"><h2>藍牙熱敏打印機</h2><p className="muted">使用支援 Web Bluetooth 的 Chromium 瀏覽器；需要 HTTPS 或 localhost。</p><div className="printer-card"><div className="printer-icon">▤</div><div><strong>{printer?.name || savedPrinter?.device_name || '尚未選取打印機'}</strong><p className="muted">{printer?.characteristic ? '已連接 · 可寫入' : printer ? '已選取 · 尚未連接' : savedPrinter?.device_name ? '已保存偏好；請重新選取裝置以取得瀏覽器授權' : '尚未連接'}</p></div></div><div className="actions"><button disabled={busy} onClick={scanPrinter}>掃描 / 選取</button><button disabled={busy || !printer} className="secondary" onClick={connectPrinter}>連接</button></div><p className="hint">瀏覽器安全限制：裝置 ID/名稱可保存，但網頁不能在下次造訪時靜默重新取得裝置權限；通常需再次由使用者選取。部分打印機使用廠商專用 BLE 協定。</p></article><article className="panel"><h2>8 cm 測試付款收據</h2><div className="receipt-preview"><div className="receipt-title">測試付款收據</div><hr/><p>店名：示範商店</p><p>測試商品　× 1　$80.00</p><hr/><strong>總計　　$80.00</strong><p>付款方式：現金</p><p className="receipt-footer">非真實交易 · 感謝惠顧</p></div><label>ESC/POS 字碼表索引（依打印機手冊）<input type="number" min="0" max="255" value={codePageIndex} onChange={e => setCodePageIndex(e.target.value)} /></label><p className="hint">文字以 Big5 編碼；此索引會送入 ESC t n 指令。不同打印機的 Big5 code page 編號不同，請先依手冊設定並列印測試。</p><button className="full" disabled={busy || !printer?.characteristic} onClick={printTest}>{busy ? '處理中…' : '打印測試收據'}</button></article><article className="panel"><h2>推播通知</h2><p className="muted">訂閱本機瀏覽器通知，方便接收應用程式通知。</p><button onClick={subscribePush}>啟用推播並測試</button></article></section>}
       {tab === 'notifications' && <section className="panel"><div className="admin-heading"><div><h2>通知</h2><p className="muted">通知保存在伺服器 SQLite，每 3 秒自動更新；重新整理或重新登入後仍可查看。</p></div><span className="count">{notifications.filter(n => !n.isRead).length} 則未讀</span></div>{notifications.length === 0 ? <p className="muted">目前沒有通知。</p> : notifications.map(n => <article className="list-item" key={n.id}><div className="list-heading"><strong>{n.title}</strong><small>{n.createdAt}</small></div><p>{n.body}</p><div className="actions"><span className="muted">{n.targetClientId ? '指定給此客戶端' : '全體廣播'}</span>{n.isRead ? <span className="status">已讀</span> : <button className="secondary compact" onClick={() => void markNotificationRead(n.id)}>標記已讀</button>}</div></article>)}</section>}
-      {tab === 'events' && <section className="grid two"><article className="panel"><h2>建立事件</h2><form onSubmit={saveEvent}><label>標題<input required value={eventTitle} onChange={e => setEventTitle(e.target.value)} /></label><label>內容<textarea rows={5} value={eventContent} onChange={e => setEventContent(e.target.value)} /></label><label>事件日期<input type="datetime-local" value={eventDate} onChange={e => setEventDate(e.target.value)} /></label><label>圖片 / 影片（可多選）<input type="file" accept="image/*,video/*" multiple onChange={e => setMedia(e.target.files)} /></label><p className="hint">每個檔案上限 100 MB；檔案存於伺服器 uploads 目錄，metadata 存於 SQLite。</p><button disabled={busy}>保存事件</button></form></article><article className="panel"><h2>歷史事件 <span className="count">{events.length}</span></h2>{events.length === 0 ? <p className="muted">尚無事件記錄。</p> : events.map(ev => <div className="list-item" key={ev.id}><div className="list-heading"><strong>{ev.title}</strong><small>{ev.event_date || ev.created_at}</small></div><p>{ev.content}</p><div className="media-list">{ev.media?.map(m => m.kind === 'image' ? <a key={m.id} href={m.url} target="_blank" rel="noreferrer"><img src={m.url} alt={m.original_name}/></a> : <video key={m.id} src={m.url} controls />)}</div><button className="danger compact" onClick={async () => { if (confirm('確定刪除此事件及其媒體記錄？')) { await api('/events/' + ev.id, token, { method: 'DELETE' }); setEvents(await api('/events', token)); } }}>刪除</button></div>)}</article></section>}
-      {tab === 'manual-event' && <section className="grid two"><article className="panel"><h2>手動建立事件記錄</h2><p className="muted">此頁專供操作人員即時建立事件；文字與多張圖片／多段影片會寫入伺服器 SQLite 及 uploads 持久化目錄。</p><form onSubmit={saveQuickEvent}><label>事件標題<input required maxLength={200} value={quickTitle} onChange={e => setQuickTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容<textarea rows={6} value={quickContent} onChange={e => setQuickContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label>事件日期與時間<input type="datetime-local" value={quickDate} onChange={e => setQuickDate(e.target.value)} /></label><label>附件圖片／影片<input type="file" accept="image/*,video/*" multiple onChange={e => setQuickMedia(e.target.files)} /></label><p className="hint">最多 20 個附件，每個檔案上限 100 MB。允許圖片與影片；保存後可在「事件管理」查看。</p><button disabled={busy || !quickTitle.trim()}>{busy ? '保存中…' : '建立並保存事件記錄'}</button></form></article><article className="panel"><h2>保存說明</h2><ul><li>事件內容及建立時間保存於 SQLite。</li><li>圖片及影片檔案保存於伺服器 uploads 目錄。</li><li>建立操作會寫入操作稽核記錄。</li><li>完成後可前往「事件管理」查看歷史事件及附件。</li></ul></article></section>}
+      {tab === 'events' && <section className="grid two">
+        <article className="panel"><h2>建立新事件／工作</h2><p className="muted">新事件預設只儲存在這部手機的瀏覽器，不會自動上傳。需要時可手動上傳系統，或使用目前已連接的熱敏打印機列印固定測試收據。</p>
+          <form onSubmit={saveLocalWork}><label>事件標題<input required maxLength={200} value={workTitle} onChange={e=>setWorkTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容／工作備註<textarea rows={5} maxLength={10000} value={workContent} onChange={e=>setWorkContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label>事件日期與時間<input type="datetime-local" value={workDate} onChange={e=>setWorkDate(e.target.value)} /></label><button disabled={busy || !workTitle.trim()}>暫存於手機</button></form>
+          <p className="hint">手機暫存只保存在目前瀏覽器／裝置；清除網站資料或更換裝置可能導致暫存遺失。暫存內容不會出現在後台，直到按下「上傳系統」。</p>
+        </article>
+        <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.length} 項</p></div></div>
+          {!localDrafts.length ? <p className="muted">目前沒有手機暫存事件。</p> : localDrafts.map(draft=><div className="list-item" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p>{draft.content || '（沒有備註）'}</p><div className="actions"><button disabled={busy} onClick={()=>void uploadLocalWork(draft)}>上傳系統</button><button className="secondary" disabled={busy || !printer?.characteristic} onClick={()=>void printTest()}>列印收據（固定測試收據）</button><button className="danger compact" disabled={busy} onClick={()=>deleteLocalWork(draft.id)}>刪除暫存</button></div></div>)}
+        </article>
+        <article className="panel"><h2>已上傳事件</h2><p className="muted">只顯示目前登入客戶端已上傳至系統的工作記錄。</p>{!uploadedWork.length ? <p className="muted">尚無已上傳事件。</p> : uploadedWork.map(item=><div className="list-item" key={item.id}><div className="list-heading"><strong>{item.title}</strong><small>{item.eventDate || item.createdAt}</small></div><p>{item.content || '（沒有備註）'}</p><span className="status">已上傳</span></div>)}</article>
+      </section>}
       {tab === 'clear-records' && <section className="grid two"><article className="panel"><h2>清除持久化記錄</h2><p className="muted">勾選需要刪除的資料類別。這是永久刪除操作，請先確認備份。</p>{[['events','事件及其圖片／影片附件'],['jobs','每日及手動工作記錄'],['logins','登入／登出歷史記錄'],['printer_preferences','伺服器保存的打印機偏好'],['push_subscriptions','推播訂閱資料']] .map(([key,label]) => <label className="check-row" key={key}><input type="checkbox" checked={clearSelections.includes(key)} onChange={e => setClearSelections(old => e.target.checked ? [...old,key] : old.filter(x => x !== key))} />{label}</label>)}<label className="check-row"><input type="checkbox" checked={clearLocalPrinter} onChange={e => setClearLocalPrinter(e.target.checked)} />本機瀏覽器 IndexedDB 打印機偏好</label><div className="warning-note">為保留可追溯性，操作稽核記錄不會被此頁清除；系統會追加一筆「清除記錄」操作。使用者帳戶、Passkey 與目前登入工作階段不會被刪除。</div><button className="danger" disabled={busy || (!clearSelections.length && !clearLocalPrinter)} onClick={clearPersistentRecords}>{busy ? '清除中…' : '永久清除所選記錄'}</button></article><article className="panel"><h2>資料保存位置</h2><p>伺服器資料庫：<code>./data/app.sqlite</code></p><p>事件媒體檔案：<code>./uploads/</code></p><p>本機打印機偏好：瀏覽器 IndexedDB（資料庫 <code>esc-printing-local</code>）。</p><p className="hint">清除事件會同時刪除事件資料、附件資料庫索引及對應媒體檔案。清除伺服器資料只影響此應用程式資料，不會清除瀏覽器的網站權限或作業系統藍牙配對。</p></article></section>}
       {tab === 'jobs' && <section className="grid two"><article className="panel"><h2>建立工作記錄</h2><form onSubmit={saveJob}><label>標題<input required value={jobTitle} onChange={e => setJobTitle(e.target.value)} /></label><label>內容<textarea rows={4} value={jobDetail} onChange={e => setJobDetail(e.target.value)} /></label><button disabled={busy}>新增工作</button></form><p className="hint">系統每日 00:00（Asia/Singapore 預設）建立一筆自動工作記錄。伺服器必須持續運行才能觸發排程；啟動時亦會補上當日缺失記錄。</p></article><article className="panel"><h2>工作歷史 <span className="count">{jobs.length}</span></h2><div className="table-wrap"><table><thead><tr><th>日期</th><th>工作</th><th>狀態</th><th>內容</th></tr></thead><tbody>{jobs.map(j => <tr key={j.id}><td>{j.job_date}</td><td>{j.title}</td><td><span className="status">{j.status}</span></td><td>{j.detail}</td></tr>)}</tbody></table></div></article></section>}
       {tab === 'logins' && <section className="panel"><h2>登入人員及歷史記錄</h2><div className="table-wrap"><table><thead><tr><th>時間</th><th>使用者</th><th>事件</th><th>結果</th><th>說明</th></tr></thead><tbody>{logins.map(l => <tr key={l.id}><td>{l.created_at}</td><td>{l.username}</td><td>{l.event}</td><td>{l.success ? '成功' : '失敗'}</td><td>{l.detail}</td></tr>)}</tbody></table></div></section>}
@@ -428,10 +471,7 @@ function App() {
         <article className="panel"><h2>客戶端即時狀態</h2><p className="hint">「強制登出」會撤銷該客戶端的伺服器工作階段；客戶端最遲在下一次 3 秒心跳時發現並清除本機登入狀態。</p><div className="table-wrap"><table><thead><tr><th>用戶／狀態</th><th>打印機</th><th>Bluetooth</th><th>最近回報</th><th>瀏覽器</th><th>操作</th></tr></thead><tbody>{(adminDashboard?.clients || []).map(c => <tr key={c.clientId}><td><strong>{c.username}</strong><div className={c.online ? 'live-pill online' : 'live-pill'}>{c.online ? '在線' : '離線'}</div><small>{c.clientId.slice(0,8)}…</small></td><td>{c.printerName || '未選取'}<div className={c.printerConnected ? 'live-pill online' : 'live-pill'}>{c.printerConnected ? '打印機已連接' : '打印機未連接'}</div></td><td>{c.bluetoothSupported ? '瀏覽器支援' : '不支援'}<div>{c.bluetoothConnected ? 'GATT 已連接' : 'GATT 未連接'}</div></td><td>{c.lastSeen}</td><td><small>{c.userAgent || '—'}</small></td><td><button className="danger compact" disabled={busy || !c.online} onClick={() => { if (window.confirm('確定強制登出此客戶端？')) void adminAction('/admin/clients/'+encodeURIComponent(c.clientId)+'/logout',{method:'POST'},'已發出強制登出指令'); }}>強制登出</button></td></tr>)}</tbody></table>{!adminDashboard?.clients.length && <p className="muted">尚未收到客戶端心跳。登入中的客戶端會自動出現在此處。</p>}</div></article>
         <article className="panel"><h2>發送通知</h2><p className="muted">通知先寫入 SQLite，客戶端每 3 秒輪詢。離線客戶端重新上線後仍可查看。</p><form onSubmit={sendAdminNotification}><label>接收對象<select value={notificationTarget} onChange={e=>setNotificationTarget(e.target.value)}><option value="">廣播所有客戶端</option>{(adminDashboard?.clients || []).map(c=><option key={c.clientId} value={c.clientId}>{c.username} · {c.clientId.slice(0,8)}… {c.online ? '（在線）' : '（離線）'}</option>)}</select></label><label>通知標題<input required maxLength={200} value={notificationTitle} onChange={e=>setNotificationTitle(e.target.value)} placeholder="例如：系統維護通知" /></label><label>通知內容<textarea required maxLength={5000} rows={4} value={notificationBody} onChange={e=>setNotificationBody(e.target.value)} placeholder="輸入要通知客戶端的訊息" /></label><button disabled={busy || !notificationTitle.trim() || !notificationBody.trim()}>{notificationTarget ? '發送指定客戶端' : '廣播所有客戶端'}</button></form></article>
         <article className="panel"><h2>已註冊用戶管理</h2><div className="table-wrap"><table><thead><tr><th>用戶</th><th>角色</th><th>Passkey</th><th>活動工作階段</th><th>最後登入</th><th>註冊時間</th><th>管理</th></tr></thead><tbody>{(adminDashboard?.users || []).map(a => <tr key={a.id}><td><strong>{a.displayName || a.username}</strong><div>{a.username}</div></td><td><select value={a.role} disabled={busy || a.id === user.id} onChange={e => void adminAction('/admin/users/'+a.id+'/role',{method:'POST',body:JSON.stringify({role:e.target.value})},'用戶角色已更新')}><option value="user">一般用戶</option><option value="admin" disabled>管理員（僅限 .env 固定帳號）</option></select></td><td>{a.passkeyCount}</td><td>{a.activeSessions}</td><td>{a.lastLogin || '—'}</td><td>{a.createdAt}</td><td><button className="danger compact" disabled={busy || a.id === user.id} onClick={() => { if(window.confirm('確定刪除此用戶？Passkey、登入工作階段、推播訂閱及其客戶端狀態會一併刪除。')) void adminAction('/admin/users/'+a.id,{method:'DELETE'},'用戶已刪除'); }}>刪除用戶</button></td></tr>)}</tbody></table></div></article>
-        <div className="grid two"><article className="panel"><h2>後台新增操作記錄</h2><form onSubmit={createAdminOperation}><label>標題<input required value={adminOpTitle} onChange={e=>setAdminOpTitle(e.target.value)} /></label><label>內容<textarea rows={3} value={adminOpContent} onChange={e=>setAdminOpContent(e.target.value)} /></label><button disabled={busy || !adminOpTitle.trim()}>新增操作記錄</button></form></article><article className="panel"><h2>後台新增工作記錄</h2><form onSubmit={createAdminWork}><label>工作標題<input required value={adminWorkTitle} onChange={e=>setAdminWorkTitle(e.target.value)} /></label><label>日期<input type="date" required value={adminWorkDate} onChange={e=>setAdminWorkDate(e.target.value)} /></label><label>工作內容<textarea rows={3} value={adminWorkDetail} onChange={e=>setAdminWorkDetail(e.target.value)} /></label><button disabled={busy || !adminWorkTitle.trim()}>新增工作記錄</button></form></article></div>
-        <article className="panel"><h2>操作記錄管理</h2><div className="table-wrap"><table><thead><tr><th>時間</th><th>人員</th><th>操作</th><th>類型</th><th>內容</th><th>管理</th></tr></thead><tbody>{(adminDashboard?.operations || []).map(op => <tr key={op.id}><td>{op.created_at}</td><td>{op.username || 'system'}</td><td>{op.action}</td><td>{op.entity_type || '—'}</td><td>{(() => { try { const d=JSON.parse(op.detail || 'null'); return d?.title ? d.title+(d.content ? '：'+d.content : '') : (op.detail || op.entity_id || '—'); } catch { return op.detail || op.entity_id || '—'; } })()}</td><td><button className="danger compact" disabled={busy} onClick={() => { if(window.confirm('確定刪除此操作記錄？系統會保留一筆刪除稽核記錄。')) void adminAction('/admin/operations/'+op.id,{method:'DELETE'},'操作記錄已刪除'); }}>刪除</button></td></tr>)}</tbody></table></div></article>
-        <article className="panel"><h2>工作記錄管理</h2><div className="table-wrap"><table><thead><tr><th>日期</th><th>標題</th><th>狀態</th><th>內容</th><th>建立時間</th><th>管理</th></tr></thead><tbody>{(adminDashboard?.jobs || []).map(j => <tr key={j.id}><td>{j.job_date}</td><td>{j.title}</td><td>{j.status}</td><td>{j.detail}</td><td>{j.created_at}</td><td><button className="danger compact" disabled={busy} onClick={() => { if(window.confirm('確定刪除此工作記錄？')) void adminAction('/admin/jobs/'+encodeURIComponent(j.id),{method:'DELETE'},'工作記錄已刪除'); }}>刪除</button></td></tr>)}</tbody></table></div></article>
-      </section>}
+        <article className="panel"><h2>各設備上傳的事件／工作記錄</h2><p className="muted">只會顯示手機客戶端主動按下「上傳系統」的內容；仍在手機暫存的事件不會顯示。記錄按上傳時間排序。</p><div className="table-wrap"><table><thead><tr><th>上傳時間</th><th>設備／用戶</th><th>打印機</th><th>事件日期</th><th>標題</th><th>內容</th></tr></thead><tbody>{(adminDashboard?.deviceWork || []).map(w=><tr key={w.id}><td>{w.createdAt}</td><td><strong>{w.username}</strong><div><small>{w.clientId.slice(0,8)}…</small></div></td><td>{w.printerName || '未回報'}</td><td>{w.eventDate || '—'}</td><td>{w.title}</td><td>{w.content || '—'}</td></tr>)}</tbody></table></div>{!adminDashboard?.deviceWork.length && <p className="muted">尚無設備上傳的工作記錄。</p>}</article></section>}}
       {tab === 'audit' && <section className="panel"><h2>操作稽核歷史</h2><div className="table-wrap"><table><thead><tr><th>時間</th><th>人員</th><th>操作</th><th>類型</th><th>對象 ID</th><th>內容</th></tr></thead><tbody>{audits.map(a => <tr key={a.id}><td>{a.created_at}</td><td>{a.username || 'system'}</td><td>{a.action}</td><td>{a.entity_type}</td><td>{a.entity_id}</td><td>{a.detail}</td></tr>)}</tbody></table></div></section>}
     </main><footer>本機持久化 · SQLite · WebAuthn · BLE ESC/POS</footer></div>;
 }

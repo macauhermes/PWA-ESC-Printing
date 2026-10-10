@@ -10,8 +10,9 @@ type Printer = { id: string; name: string; device: BluetoothDevice; characterist
 type AdminClient = { clientId:string; userId:string; username:string; online:number; bluetoothSupported:number; bluetoothConnected:number; printerConnected:number; printerName?:string; printerId?:string; userAgent?:string; lastSeen:string };
 type AdminUser = { id:string; username:string; displayName:string; role:string; createdAt:string; passkeyCount:number; activeSessions:number; lastLogin?:string };
 type AdminOperation = { id:number; username?:string; action:string; entity_type?:string; entity_id?:string; detail?:string; created_at:string };
-type DeviceWork = { id:string; clientId:string; userId:string; username:string; title:string; content:string; eventDate?:string|null; createdAt:string; printerName?:string|null };
-type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string };
+type WorkMedia = { id?:string; kind:string; originalName:string; mimeType:string; url?:string; name?:string; size?:number; blob?:Blob };
+type DeviceWork = { id:string; clientId:string; userId:string; username:string; title:string; content:string; eventDate?:string|null; createdAt:string; printerName?:string|null; media?:WorkMedia[] };
+type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string; media:WorkMedia[] };
 type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; operations:AdminOperation[]; jobs:Job[]; deviceWork:DeviceWork[]; serverTime:string };
 type NotificationItem = { id:string; title:string; body:string; targetClientId?:string|null; createdAt:string; isRead:number; readAt?:string };
 
@@ -32,7 +33,7 @@ type SavedPrinter = { id: string; name: string; savedAt: string };
 function printerStore(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open('esc-printing-local', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('preferences', { keyPath: 'id' });
+    request.onupgradeneeded = () => { const db = request.result; if (!db.objectStoreNames.contains('preferences')) db.createObjectStore('preferences', { keyPath: 'id' }); if (!db.objectStoreNames.contains('workDrafts')) db.createObjectStore('workDrafts', { keyPath: 'id' }); };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -45,6 +46,21 @@ async function savePrinterLocally(value: SavedPrinter) {
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+  db.close();
+}
+async function saveLocalDraft(value: LocalDraft) {
+  const db = await printerStore();
+  await new Promise<void>((resolve, reject) => { const tx = db.transaction('workDrafts', 'readwrite'); tx.objectStore('workDrafts').put(value); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
+  db.close();
+}
+async function loadLocalDrafts(): Promise<LocalDraft[]> {
+  const db = await printerStore();
+  const value = await new Promise<LocalDraft[]>((resolve, reject) => { const request = db.transaction('workDrafts', 'readonly').objectStore('workDrafts').getAll(); request.onsuccess = () => resolve((request.result || []).sort((a:LocalDraft,b:LocalDraft) => b.createdAt.localeCompare(a.createdAt))); request.onerror = () => reject(request.error); });
+  db.close(); return value;
+}
+async function deleteLocalDraft(id: string) {
+  const db = await printerStore();
+  await new Promise<void>((resolve, reject) => { const tx = db.transaction('workDrafts', 'readwrite'); tx.objectStore('workDrafts').delete(id); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
   db.close();
 }
 async function loadPrinterLocally(): Promise<SavedPrinter | null> {
@@ -74,7 +90,8 @@ function App() {
   const [savedPrinter, setSavedPrinter] = useState<any>(null);
   const [codePageIndex, setCodePageIndex] = useState('0');
   const [events, setEvents] = useState<EventItem[]>([]);
-  const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>(() => { try { return JSON.parse(localStorage.getItem('esc-work-drafts') || '[]'); } catch { return []; } });
+  const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
+  const [workMedia, setWorkMedia] = useState<File[]>([]);
   const [uploadedWork, setUploadedWork] = useState<DeviceWork[]>([]);
   const [workTitle, setWorkTitle] = useState('');
   const [workContent, setWorkContent] = useState('');
@@ -129,7 +146,7 @@ function App() {
     }).catch(() => {});
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, [token, user]);
-  useEffect(() => { localStorage.setItem('esc-work-drafts', JSON.stringify(localDrafts)); }, [localDrafts]);
+  useEffect(() => { loadLocalDrafts().then(setLocalDrafts).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, []);
 
   useEffect(() => {
     if (!token || !user) return;
@@ -207,13 +224,13 @@ function App() {
     setAdminOpTitle(''); setAdminOpContent('');
   }
   async function sendAdminNotification(e: React.FormEvent) {
-    e.preventDefault();
+    e.preventDefault(); setBusy(true);
     try {
-      await adminAction('/admin/notifications', { method:'POST', body:JSON.stringify({
-        title: notificationTitle, body: notificationBody, targetClientId: notificationTarget
-      }) }, notificationTarget ? '指定客戶端通知已保存' : '廣播通知已保存');
+      const result = await api('/admin/notifications', token, { method:'POST', body:JSON.stringify({ title: notificationTitle, body: notificationBody, targetClientId: notificationTarget }) });
+      await refreshAdmin(); setMessage(result.message || '通知已發送。');
       setNotificationTitle(''); setNotificationBody('');
-    } catch {}
+    } catch (err) { setMessage(err instanceof Error ? err.message : '通知發送失敗'); }
+    finally { setBusy(false); }
   }
   async function markNotificationRead(notificationId: string) {
     try {
@@ -342,42 +359,45 @@ function App() {
   }
 
   async function uploadCurrentWork() {
-    const title = workTitle.trim();
-    if (!title) { setMessage('請輸入事件標題'); return; }
+    const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
     setBusy(true);
     try {
-      await api('/work', token, { method:'POST', body:JSON.stringify({ title, content:workContent.trim(), eventDate:workDate }) });
+      const data = new FormData(); data.append('title', title); data.append('content', workContent.trim()); data.append('eventDate', workDate);
+      workMedia.forEach(file => data.append('media', file, file.name));
+      await api('/work', token, { method:'POST', body:data });
       setUploadedWork(await api('/work', token));
-      setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16));
-      setMessage('事件已直接上傳系統。');
+      setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16)); setWorkMedia([]);
+      setMessage('事件及附件已直接上傳系統。');
     } catch (err) { setMessage(err instanceof Error ? err.message : '上傳事件失敗'); }
     finally { setBusy(false); }
   }
 
-  function saveLocalWork(e: React.FormEvent) {
-    e.preventDefault();
-    const title = workTitle.trim();
-    if (!title) { setMessage('請輸入事件標題'); return; }
-    const draft: LocalDraft = { id: crypto.randomUUID(), title, content: workContent.trim(), eventDate: workDate, createdAt: new Date().toISOString() };
-    setLocalDrafts(old => [draft, ...old]);
-    setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16));
-    setMessage('事件已暫存在此手機，尚未上傳系統。');
+  async function saveLocalWork(e: React.FormEvent) {
+    e.preventDefault(); const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
+    setBusy(true);
+    try {
+      const draft: LocalDraft = { id: crypto.randomUUID(), title, content: workContent.trim(), eventDate: workDate, createdAt: new Date().toISOString(), media: workMedia.map(file => ({ name:file.name, originalName:file.name, kind:file.type.startsWith('video/') ? 'video' : 'image', mimeType:file.type, size:file.size, blob:file })) };
+      await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]);
+      setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16)); setWorkMedia([]);
+      setMessage('事件及附件已暫存在手機，尚未上傳系統。');
+    } catch { setMessage('手機暫存失敗；可能是裝置儲存空間不足。請減少影片大小後再試。'); }
+    finally { setBusy(false); }
   }
 
   async function uploadLocalWork(draft: LocalDraft) {
     setBusy(true);
     try {
-      await api('/work', token, { method:'POST', body:JSON.stringify({ title:draft.title, content:draft.content, eventDate:draft.eventDate }) });
-      setLocalDrafts(old => old.filter(item => item.id !== draft.id));
-      setUploadedWork(await api('/work', token));
-      setMessage('事件已上傳系統，並已從手機暫存清單移除。');
-    } catch (err) { setMessage(err instanceof Error ? err.message : '上傳事件失敗'); }
+      const data = new FormData(); data.append('title', draft.title); data.append('content', draft.content); data.append('eventDate', draft.eventDate);
+      draft.media.forEach(file => { if (file.blob) data.append('media', file.blob, file.name || file.originalName || 'attachment'); });
+      await api('/work', token, { method:'POST', body:data });
+      await deleteLocalDraft(draft.id); setLocalDrafts(old => old.filter(item => item.id !== draft.id));
+      setUploadedWork(await api('/work', token)); setMessage(`事件及 ${draft.media.length} 個附件已上傳。`);
+    } catch (err) { setMessage(err instanceof Error ? err.message : '上傳事件失敗；手機暫存仍會保留，請重試。'); }
     finally { setBusy(false); }
   }
-  function deleteLocalWork(draftId: string) {
+  async function deleteLocalWork(draftId: string) {
     if (!window.confirm('確定刪除此手機暫存事件？')) return;
-    setLocalDrafts(old => old.filter(item => item.id !== draftId));
-    setMessage('已刪除手機暫存事件。');
+    await deleteLocalDraft(draftId).catch(() => {}); setLocalDrafts(old => old.filter(item => item.id !== draftId)); setMessage('已刪除手機暫存事件。');
   }
 
   async function saveEvent(e: React.FormEvent) {
@@ -449,7 +469,7 @@ function App() {
   }
 
   const tabs = useMemo(() => {
-    const base: [string,string][] = [['printer', '藍牙打印'], ['notifications', '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')], ['events', '事件管理']];
+    const base: [string,string][] = [['printer', '藍牙打印'], ['printer-test', '測試打印'], ['notifications', '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')], ['events', '事件管理']];
     if (user?.role === 'admin') base.push(['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄'], ['admin', '管理後台']);
     return base;
   }, [user?.role, notifications]);

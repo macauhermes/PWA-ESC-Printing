@@ -273,6 +273,15 @@ app.post('/api/admin/clients/:clientId/logout', auth, requireAdmin, (req: any, r
   audit(req.user, 'admin.client_forced_logout', 'client', clientId, { username: client.username });
   res.json({ ok: true });
 });
+app.delete('/api/admin/device-work/:id', auth, requireAdmin, (req: any, res) => {
+  const workId = String(req.params.id || '').slice(0, 128);
+  const work = db.prepare('SELECT id,username,title,client_id AS clientId FROM client_work WHERE id=?').get(workId) as any;
+  if (!work) return res.status(404).json({ error: '工作記錄不存在' });
+  const mediaCount = deleteDeviceWork(workId);
+  audit(req.user, 'admin.device_work_deleted', 'client_work', workId, { username:work.username, clientId:work.clientId, title:work.title, mediaCount });
+  res.json({ ok:true, id:workId, mediaCount });
+});
+
 app.post('/api/admin/notifications', auth, requireAdmin, async (req: any, res) => {
   const title = String(req.body.title || '').trim().slice(0, 200);
   const body = String(req.body.body || '').trim().slice(0, 5000);
@@ -349,6 +358,27 @@ app.get('/api/work', auth, (req: any, res) => {
   const media = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   res.json(rows.map(w => ({ ...w, media: media.filter(m => m.workId === w.id).map(m => ({ ...m, url: '/uploads/' + m.filename })) })));
 });
+function deleteDeviceWork(workId: string) {
+  const media = db.prepare('SELECT filename FROM work_media WHERE work_id=?').all(workId) as { filename:string }[];
+  const remove = db.transaction(() => {
+    db.prepare('DELETE FROM work_media WHERE work_id=?').run(workId);
+    db.prepare('DELETE FROM client_work WHERE id=?').run(workId);
+  });
+  remove();
+  for (const item of media) try { fs.unlinkSync(path.join(uploadDir, item.filename)); } catch {}
+  return media.length;
+}
+
+app.delete('/api/work/:id', auth, (req: any, res) => {
+  const clientId = String(req.user.client_id || '').slice(0, 128);
+  const workId = String(req.params.id || '').slice(0, 128);
+  const work = db.prepare('SELECT id,title FROM client_work WHERE id=? AND client_id=?').get(workId, clientId) as any;
+  if (!work) return res.status(404).json({ error: '工作記錄不存在或無權刪除' });
+  const mediaCount = deleteDeviceWork(workId);
+  audit(req.user, 'client.work_deleted', 'client_work', workId, { title: work.title, mediaCount });
+  res.json({ ok:true, id:workId });
+});
+
 app.post('/api/work', auth, upload.array('media', 20), (req: any, res) => {
   const clientId = String(req.user.client_id || '').slice(0, 128);
   const title = String(req.body.title || '').trim().slice(0, 200);

@@ -131,7 +131,8 @@ function App() {
     setMediaViewer({ src, kind: media.kind === 'video' || media.mimeType?.startsWith('video/') ? 'video' : 'image', name: media.originalName || media.name || '附件', revokeOnClose: !media.url && Boolean(media.blob) });
   }
   function closeMediaViewer() {
-    setMediaViewer(current => { if (current?.revokeOnClose) URL.revokeObjectURL(current.src); return null; });
+    if (mediaViewer?.revokeOnClose) URL.revokeObjectURL(mediaViewer.src);
+    setMediaViewer(null);
   }
   useEffect(() => {
     if (!mediaViewer) return;

@@ -195,6 +195,12 @@ app.post('/api/printer-preference', auth, (req: any, res) => {
   audit(req.user, 'printer.preference_saved', 'printer', deviceId, { deviceName }); res.json({ ok: true });
 });
 app.get('/api/printer-preference', auth, (req: any, res) => res.json(db.prepare('SELECT device_id AS deviceId,device_name AS deviceName,updated_at AS updatedAt FROM printer_preferences WHERE user_id=?').get(req.user.id) || null));
+app.post('/api/printer-action', auth, (req: any, res) => {
+  const action = String(req.body.action || 'unknown');
+  if (!['connected', 'disconnected', 'connection_failed'].includes(action)) return res.status(400).json({ error: 'Invalid printer action' });
+  audit(req.user, 'printer.' + action, 'printer', String(req.body.deviceId || ''), { deviceName: String(req.body.deviceName || ''), detail: String(req.body.detail || '') });
+  res.json({ ok: true });
+});
 
 app.post('/api/push/subscribe', auth, (req: any, res) => {
   if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return res.status(503).json({ error: 'Web Push VAPID keys are not configured' });

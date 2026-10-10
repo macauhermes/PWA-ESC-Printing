@@ -186,7 +186,12 @@ app.post('/api/admin/login', async (req: any, res) => {
   audit(publicUser(user), 'auth.admin_login_success', 'user', user.id);
   res.json({ token, user: publicUser(user) });
 });
-app.get('/api/me', auth, (req: any, res) => res.json({ user: publicUser(req.user) }));
+app.get('/api/me', auth, (req: any, res) => {
+  const user = publicUser(req.user);
+  // An old Passkey session for the configured admin must not expose admin navigation.
+  if (user.role === 'admin' && req.user.login_type !== 'admin_password') user.role = 'user';
+  res.json({ user });
+});
 
 app.post('/api/client/heartbeat', auth, (req: any, res) => {
   const clientId = String(req.body.clientId || req.user.client_id || '').slice(0, 128);
@@ -237,10 +242,7 @@ app.post('/api/admin/users/:id/role', auth, requireAdmin, (req: any, res) => {
   if (role !== 'user') return res.status(400).json({ error: 'The administrator account is configured only through ADMIN_USERNAME and cannot be assigned to other users' });
   const target = db.prepare('SELECT id,username,role FROM users WHERE id=?').get(req.params.id) as any;
   if (!target) return res.status(404).json({ error: 'User not found' });
-  if (target.id === req.user.id && role !== 'admin') return res.status(400).json({ error: 'You cannot remove your own administrator role' });
-  if (adminUsername && target.username === adminUsername && role !== 'admin') return res.status(400).json({ error: 'The configured administrator account cannot be demoted here' });
-  if (target.role === 'admin' && role !== 'admin' && (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin'").get() as any).n <= 1)
-    return res.status(400).json({ error: 'At least one administrator must remain' });
+  if (adminUsername && target.username === adminUsername) return res.status(400).json({ error: 'The configured administrator account cannot be demoted here' });
   db.prepare('UPDATE users SET role=? WHERE id=?').run(role, target.id);
   audit(req.user, 'admin.user_role_changed', 'user', target.id, { username: target.username, role });
   res.json({ ok: true });

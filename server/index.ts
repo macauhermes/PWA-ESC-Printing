@@ -232,6 +232,7 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     CASE WHEN c.online=1 AND datetime(c.last_seen)>=datetime('now','-10 seconds') THEN 1 ELSE 0 END AS online,
     c.bluetooth_supported AS bluetoothSupported,c.bluetooth_connected AS bluetoothConnected,
     c.printer_connected AS printerConnected,c.printer_name AS printerName,c.printer_id AS printerId,
+    (SELECT COUNT(*) FROM push_subscriptions ps WHERE ps.client_id=c.client_id) AS pushSubscribed,
     c.user_agent AS userAgent,c.last_seen AS lastSeen FROM client_status c ORDER BY c.last_seen DESC`).all();
   const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();
   const jobs = db.prepare('SELECT * FROM daily_jobs ORDER BY created_at DESC LIMIT 200').all();
@@ -423,6 +424,9 @@ app.post('/api/records/clear', auth, requireAdmin, (req: any, res) => {
         counts.jobs = (db.prepare('SELECT COUNT(*) AS n FROM daily_jobs').get() as any).n; db.prepare('DELETE FROM daily_jobs').run();
       } else if (category === 'work') {
         counts.work = (db.prepare('SELECT COUNT(*) AS n FROM client_work').get() as any).n;
+        const workFiles = db.prepare('SELECT filename FROM work_media').all() as { filename:string }[];
+        for (const row of workFiles) { const target = path.resolve(uploadDir, row.filename); if (target.startsWith(uploadDir + path.sep) && fs.existsSync(target)) try { fs.unlinkSync(target); } catch {} }
+        db.prepare('DELETE FROM work_media').run();
         db.prepare('DELETE FROM client_work').run();
       } else if (category === 'logins') {
         counts.logins = (db.prepare('SELECT COUNT(*) AS n FROM login_events').get() as any).n;

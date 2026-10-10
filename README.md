@@ -81,7 +81,7 @@ Docker 映像使用 Node.js 26.11，建置 Vite 前端及 Express API，容器�
 
 ```bash
 cp .env.example .env
-# 編輯 .env，至少設定 ADMIN_USERNAMES、SESSION_SECRET；
+# 編輯 .env，設定 ADMIN_USERNAME、ADMIN_PASSWORD、SESSION_SECRET；
 # 正式環境請確認 VAPID 金鑰及其他設定。
 ```
 

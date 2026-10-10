@@ -237,7 +237,7 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
   const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();
   const jobs = db.prepare('SELECT * FROM daily_jobs ORDER BY created_at DESC LIMIT 200').all();
   const deviceWork = db.prepare(`SELECT w.id,w.client_id AS clientId,w.user_id AS userId,w.username,w.title,w.content,w.event_date AS eventDate,w.created_at AS createdAt,w.printer_name AS printerName
-    FROM client_work w ORDER BY w.created_at DESC LIMIT 1000`).all() as any[];
+    undefined`).all() as any[];
   const workMedia = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   for (const work of deviceWork) work.media = workMedia.filter(m => m.workId === work.id).map(m => ({ ...m, url: '/uploads/' + m.filename }));
   res.json({ users, clients, operations, jobs, deviceWork, serverTime: new Date().toISOString() });
@@ -345,7 +345,7 @@ const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024, files: 2
 app.get('/api/work', auth, (req: any, res) => {
   const clientId = String(req.user.client_id || '').slice(0, 128);
   if (!clientId) return res.status(409).json({ error: '客戶端尚未初始化；請等待裝置心跳完成後再載入工作記錄。' });
-  const rows = db.prepare('SELECT id,client_id AS clientId,title,content,event_date AS eventDate,created_at AS createdAt FROM client_work WHERE client_id=? ORDER BY created_at DESC LIMIT 500').all(clientId) as any[];
+  const rows = db.prepare('SELECT id,client_id AS clientId,title,content,event_date AS eventDate,created_at AS createdAt undefined').all(clientId) as any[];
   const media = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   res.json(rows.map(w => ({ ...w, media: media.filter(m => m.workId === w.id).map(m => ({ ...m, url: '/uploads/' + m.filename })) })));
 });

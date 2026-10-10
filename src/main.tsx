@@ -14,6 +14,7 @@ type WorkMedia = { id?:string; kind:string; originalName:string; mimeType:string
 type DeviceWork = { id:string; clientId:string; userId:string; username:string; title:string; content:string; eventDate?:string|null; createdAt:string; printerName?:string|null; media?:WorkMedia[] };
 type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string; media:WorkMedia[] };
 type MediaViewer = { src:string; kind:'image'|'video'; name:string; revokeOnClose:boolean };
+type UploadProgress = { loaded:number; total:number; percent:number|null; bytesPerSecond:number };
 type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; operations:AdminOperation[]; jobs:Job[]; deviceWork:DeviceWork[]; serverTime:string };
 type NotificationItem = { id:string; title:string; body:string; targetClientId?:string|null; createdAt:string; isRead:number; readAt?:string };
 
@@ -26,6 +27,35 @@ const api = async (path: string, token: string, init: RequestInit = {}) => {
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
   return body;
 };
+function uploadFormDataWithProgress(path: string, token: string, data: FormData, onProgress: (progress: UploadProgress) => void): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let lastLoaded = 0;
+    let lastAt = Date.now();
+    xhr.open('POST', '/api' + path);
+    xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.upload.onprogress = event => {
+      const now = Date.now();
+      const elapsed = Math.max(1, now - lastAt) / 1000;
+      const delta = Math.max(0, event.loaded - lastLoaded);
+      const bytesPerSecond = delta / elapsed;
+      onProgress({ loaded: event.loaded, total: event.lengthComputable ? event.total : 0, percent: event.lengthComputable && event.total > 0 ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null, bytesPerSecond });
+      lastLoaded = event.loaded;
+      lastAt = now;
+    };
+    xhr.onerror = () => reject(new Error('網絡連線中斷，請檢查網絡後重試。'));
+    xhr.onabort = () => reject(new Error('上傳已取消。'));
+    xhr.onload = () => {
+      let body: any = {};
+      try { body = JSON.parse(xhr.responseText || '{}'); } catch {}
+      if (xhr.status < 200 || xhr.status >= 300) reject(new Error(body.error || `HTTP ${xhr.status}`));
+      else resolve(body);
+    };
+    xhr.send(data);
+  });
+}
+const formatBytes = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
+const formatSpeed = (bytesPerSecond: number) => `${(bytesPerSecond / 1024 / 1024).toFixed(2)} MB/s`;
 const b64url = (s: string) => s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4);
 const b64 = (s: string) => Uint8Array.from(atob(b64url(s)), c => c.charCodeAt(0));
 const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, b => String.fromCharCode(b)).join(''));
@@ -94,6 +124,7 @@ function App() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
   const [workMedia, setWorkMedia] = useState<File[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [uploadedWork, setUploadedWork] = useState<DeviceWork[]>([]);
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
   const [workTitle, setWorkTitle] = useState('');
@@ -375,12 +406,13 @@ function App() {
     try {
       const data = new FormData(); data.append('title', title); data.append('content', workContent.trim()); data.append('eventDate', workDate);
       workMedia.forEach(file => data.append('media', file, file.name));
-      await api('/work', token, { method:'POST', body:data });
+      setUploadProgress({ loaded:0, total:0, percent:0, bytesPerSecond:0 });
+      await uploadFormDataWithProgress('/work', token, data, setUploadProgress);
       setUploadedWork(await api('/work', token));
       setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16)); setWorkMedia([]);
       setMessage('事件及附件已直接上傳系統。');
     } catch (err) { setMessage(err instanceof Error ? err.message : '上傳事件失敗'); }
-    finally { setBusy(false); }
+    finally { setBusy(false); window.setTimeout(() => setUploadProgress(null), 1200); }
   }
 
   async function saveLocalWork(e: React.FormEvent) {
@@ -400,11 +432,12 @@ function App() {
     try {
       const data = new FormData(); data.append('title', draft.title); data.append('content', draft.content); data.append('eventDate', draft.eventDate);
       draft.media.forEach(file => { if (file.blob) data.append('media', file.blob, file.name || file.originalName || 'attachment'); });
-      await api('/work', token, { method:'POST', body:data });
+      setUploadProgress({ loaded:0, total:0, percent:0, bytesPerSecond:0 });
+      await uploadFormDataWithProgress('/work', token, data, setUploadProgress);
       await deleteLocalDraft(draft.id); setLocalDrafts(old => old.filter(item => item.id !== draft.id));
       setUploadedWork(await api('/work', token)); setMessage(`事件及 ${draft.media.length} 個附件已上傳。`);
     } catch (err) { setMessage(err instanceof Error ? err.message : '上傳事件失敗；手機暫存仍會保留，請重試。'); }
-    finally { setBusy(false); }
+    finally { setBusy(false); window.setTimeout(() => setUploadProgress(null), 1200); }
   }
   async function deleteLocalWork(draftId: string) {
     if (!window.confirm('確定刪除此手機暫存事件？')) return;
@@ -523,8 +556,9 @@ function App() {
       </section>}
       {tab === 'notifications' && user.role === 'admin' && <section className="panel"><h2>發送通知</h2><p className="muted">通知集中於此頁管理。通知會保存到客戶端站內通知中心；如已設定 VAPID，亦會向指定已訂閱設備或所有已訂閱設備發送 Web Push。管理員不顯示自己的通知收件匣。</p><form onSubmit={sendAdminNotification}><label>接收對象<select value={notificationTarget} onChange={e=>setNotificationTarget(e.target.value)}><option value="">廣播所有已訂閱設備</option>{(adminDashboard?.clients || []).filter(c => Number(c.pushSubscribed || 0) > 0).map(c=><option key={c.clientId} value={c.clientId}>{c.username} · {c.clientId.slice(0,8)}… {c.online ? '（在線）' : '（離線）'} · 已訂閱推播</option>)}</select></label><label>通知標題<input required maxLength={200} value={notificationTitle} onChange={e=>setNotificationTitle(e.target.value)} placeholder="例如：系統維護通知" /></label><label>通知內容<textarea required maxLength={5000} rows={4} value={notificationBody} onChange={e=>setNotificationBody(e.target.value)} placeholder="輸入要通知客戶端的訊息" /></label><button disabled={busy || !notificationTitle.trim() || !notificationBody.trim()}>{notificationTarget ? '推播指定設備' : '廣播所有已訂閱設備'}</button></form></section>}
             {tab === 'notifications' && user.role !== 'admin' && <section className="panel"><div className="admin-heading"><div><h2>通知</h2><p className="muted">通知保存在伺服器 SQLite，每 3 秒自動更新；重新登入後仍可查看。啟用 Web App 推播後，即使 App 在背景也可接收系統通知（視瀏覽器及作業系統支援而定）。</p></div><span className="count">{notifications.filter(n => !n.isRead).length} 則未讀</span></div><div className="actions"><button disabled={busy} onClick={() => void subscribePush()}>啟用／修復推播訂閱</button></div><p className="hint">iPhone／iPad：請先將網站加入主畫面並從主畫面開啟；Android：請使用最新版 Chrome 或支援 Web Push 的瀏覽器。兩者均須使用 HTTPS 並允許通知。</p>{notifications.length === 0 ? <p className="muted">目前沒有通知。</p> : notifications.map(n => <article className="list-item" key={n.id}><div className="list-heading"><strong>{n.title}</strong><small>{n.createdAt}</small></div><p>{n.body}</p><div className="actions"><span className="muted">{n.targetClientId ? '指定給此客戶端' : '全體廣播'}</span>{n.isRead ? <span className="status">已讀</span> : <button className="secondary compact" onClick={() => void markNotificationRead(n.id)}>標記已讀</button>}</div></article>)}</section>}{tab === 'events' && user.role !== 'admin' && <section className="grid two">
-        <article className="panel"><h2>建立新事件／工作</h2><p className="muted">新事件預設只儲存在這部手機的瀏覽器，不會自動上傳。需要時可手動上傳系統，或使用目前已連接的熱敏打印機列印固定測試收據。</p>
-          <form onSubmit={saveLocalWork}><label>事件標題<input required maxLength={200} value={workTitle} onChange={e=>setWorkTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容／工作備註<textarea rows={5} maxLength={10000} value={workContent} onChange={e=>setWorkContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label>事件日期與時間<input type="datetime-local" value={workDate} onChange={e=>setWorkDate(e.target.value)} /></label><label>圖片／影片附件（可多選）<input type="file" accept="image/*,video/*" multiple onChange={e=>setWorkMedia(Array.from(e.target.files || []))} /></label><p className="muted">已選取 {workMedia.length} 個附件；每個事件最多 20 個圖片／影片，單一檔案上限 100 MB。</p>{workMedia.map((file,i)=><p className="muted" key={file.name+i}>{file.type.startsWith('video/')?'影片':'圖片'}：{file.name}（{(file.size/1024/1024).toFixed(1)} MB）</p>)}<div className="actions"><button type="submit" disabled={busy || !workTitle.trim()}>暫存於手機</button><button type="button" disabled={busy || !workTitle.trim()} onClick={()=>void uploadCurrentWork()}>上傳事件及附件</button></div></form>
+        <article className="panel"><h2>建立事件</h2><p className="muted">新事件預設只儲存在這部手機的瀏覽器，不會自動上傳。需要時可手動上傳系統，或使用目前已連接的熱敏打印機列印固定測試收據。</p>
+          <form onSubmit={saveLocalWork}><label>事件標題<input required maxLength={200} value={workTitle} onChange={e=>setWorkTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容／工作備註<textarea rows={5} maxLength={10000} value={workContent} onChange={e=>setWorkContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label className="event-date-field">事件日期與時間<input className="event-datetime-input" type="datetime-local" value={workDate} onChange={e=>setWorkDate(e.target.value)} /></label><label>圖片／影片附件（可多選）<input type="file" accept="image/*,video/*" multiple onChange={e=>setWorkMedia(Array.from(e.target.files || []))} /></label><p className="muted">已選取 {workMedia.length} 個附件；每個事件最多 20 個圖片／影片，單一檔案上限 100 MB。</p>
+          {uploadProgress && <div className="upload-progress" role="status" aria-live="polite"><div className="upload-progress-heading"><strong>附件上傳中</strong><span>{uploadProgress.percent === null ? `${formatBytes(uploadProgress.loaded)} 已傳送` : `${uploadProgress.percent}%`}</span></div><progress max={100} value={uploadProgress.percent ?? 0} /><div className="upload-progress-details"><span>{formatBytes(uploadProgress.loaded)}{uploadProgress.total ? ` / ${formatBytes(uploadProgress.total)}` : ' 已傳送'}</span><span>目前速度約 {formatSpeed(uploadProgress.bytesPerSecond)}</span></div></div>}{workMedia.map((file,i)=><p className="muted" key={file.name+i}>{file.type.startsWith('video/')?'影片':'圖片'}：{file.name}（{(file.size/1024/1024).toFixed(1)} MB）</p>)}<div className="actions"><button type="submit" disabled={busy || !workTitle.trim()}>暫存於手機</button><button type="button" disabled={busy || !workTitle.trim()} onClick={()=>void uploadCurrentWork()}>上傳事件及附件</button></div></form>
           <p className="hint">手機暫存只保存在目前瀏覽器／裝置；清除網站資料或更換裝置可能導致暫存遺失。暫存內容不會出現在後台，直到按下「上傳系統」。</p>
         </article>
         <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.length} 項</p></div></div>

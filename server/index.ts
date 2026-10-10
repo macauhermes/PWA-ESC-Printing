@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import multer from 'multer';
 import cron from 'node-cron';
-import webpush from 'web-push';
+import webpush from 'web-push';\nimport iconvLite from 'iconv-lite';
 import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 import type { AuthenticationResponseJSON, RegistrationResponseJSON, WebAuthnCredential } from '@simplewebauthn/server';
 import { db } from './db.js';
@@ -54,7 +54,7 @@ app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'PWA ESC Pri
 app.get('/api/config', (_req, res) => res.json({ rpName, rpID, origin, vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '' }));
 
 // Passkey enrollment. In production, disable open enrollment or add an invitation/admin workflow.
-app.post('/api/auth/register/options', (req, res) => {
+app.post('/api/auth/register/options', async (req, res) => {
   if (process.env.ALLOW_SELF_REGISTRATION === 'false') return res.status(403).json({ error: 'Self registration is disabled' });
   const username = String(req.body.username || '').trim().toLowerCase();
   const displayName = String(req.body.displayName || username).trim();
@@ -62,7 +62,7 @@ app.post('/api/auth/register/options', (req, res) => {
   let user = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
   if (!user) { user = { id: id(), username, display_name: displayName, role: 'user' }; db.prepare('INSERT INTO users(id,username,display_name) VALUES(?,?,?)').run(user.id, username, displayName); }
   const existing = db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[];
-  const options = awaitRegistrationOptions(user, existing);
+  const options = await awaitRegistrationOptions(user, existing);
   const cid = challenge('register', options.challenge);
   res.json({ ...options, challengeId: cid, userId: user.id });
 });
@@ -208,4 +208,18 @@ app.post('/api/push/test', auth, async (req: any, res) => {
   res.json({ sent: result.filter(r => r.status === 'fulfilled').length, total: subs.length });
 });
 
-app.listen(port, () => console.log(`PWA ESC Printing API listening on :${port}`));
+const requireIconv = () => iconvLite;\n
+app.post('/api/receipt/encode', auth, (req: any, res) => {
+  const iconv = requireIconv();
+  const text = String(req.body.text || '');
+  // Big5 is the requested encoding. Printer ESC/POS code-page number is firmware-specific;
+  // clients can override the returned index after checking the printer manual.
+  const bytes = iconv.encode(text, 'big5');
+  audit(req.user, 'receipt.encoded', 'receipt', undefined, { encoding: 'Big5', byteLength: bytes.length });
+  res.json({ base64: bytes.toString('base64'), encoding: 'Big5', codePageIndex: Number.isInteger(req.body.codePageIndex) ? req.body.codePageIndex : 0 });
+});
+app.post('/api/receipt/print-log', auth, (req: any, res) => {
+  audit(req.user, 'receipt.print_requested', 'receipt', undefined, { printerName: String(req.body.printerName || ''), receiptType: 'test', status: String(req.body.status || 'submitted') });
+  res.json({ ok: true });
+});
+\napp.listen(port, () => console.log(`PWA ESC Printing API listening on :${port}`));

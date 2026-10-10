@@ -341,6 +341,19 @@ function App() {
     finally { setBusy(false); }
   }
 
+  async function uploadCurrentWork() {
+    const title = workTitle.trim();
+    if (!title) { setMessage('請輸入事件標題'); return; }
+    setBusy(true);
+    try {
+      await api('/work', token, { method:'POST', body:JSON.stringify({ title, content:workContent.trim(), eventDate:workDate }) });
+      setUploadedWork(await api('/work', token));
+      setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16));
+      setMessage('事件已直接上傳系統。');
+    } catch (err) { setMessage(err instanceof Error ? err.message : '上傳事件失敗'); }
+    finally { setBusy(false); }
+  }
+
   function saveLocalWork(e: React.FormEvent) {
     e.preventDefault();
     const title = workTitle.trim();
@@ -453,7 +466,7 @@ function App() {
       {tab === 'notifications' && <section className="panel"><div className="admin-heading"><div><h2>通知</h2><p className="muted">通知保存在伺服器 SQLite，每 3 秒自動更新；重新整理或重新登入後仍可查看。</p></div><span className="count">{notifications.filter(n => !n.isRead).length} 則未讀</span></div>{notifications.length === 0 ? <p className="muted">目前沒有通知。</p> : notifications.map(n => <article className="list-item" key={n.id}><div className="list-heading"><strong>{n.title}</strong><small>{n.createdAt}</small></div><p>{n.body}</p><div className="actions"><span className="muted">{n.targetClientId ? '指定給此客戶端' : '全體廣播'}</span>{n.isRead ? <span className="status">已讀</span> : <button className="secondary compact" onClick={() => void markNotificationRead(n.id)}>標記已讀</button>}</div></article>)}</section>}
       {tab === 'events' && <section className="grid two">
         <article className="panel"><h2>建立新事件／工作</h2><p className="muted">新事件預設只儲存在這部手機的瀏覽器，不會自動上傳。需要時可手動上傳系統，或使用目前已連接的熱敏打印機列印固定測試收據。</p>
-          <form onSubmit={saveLocalWork}><label>事件標題<input required maxLength={200} value={workTitle} onChange={e=>setWorkTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容／工作備註<textarea rows={5} maxLength={10000} value={workContent} onChange={e=>setWorkContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label>事件日期與時間<input type="datetime-local" value={workDate} onChange={e=>setWorkDate(e.target.value)} /></label><button disabled={busy || !workTitle.trim()}>暫存於手機</button></form>
+          <form onSubmit={saveLocalWork}><label>事件標題<input required maxLength={200} value={workTitle} onChange={e=>setWorkTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容／工作備註<textarea rows={5} maxLength={10000} value={workContent} onChange={e=>setWorkContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label>事件日期與時間<input type="datetime-local" value={workDate} onChange={e=>setWorkDate(e.target.value)} /></label><div className="actions"><button type="submit" disabled={busy || !workTitle.trim()}>暫存於手機</button><button type="button" disabled={busy || !workTitle.trim()} onClick={()=>void uploadCurrentWork()}>直接上傳系統</button><button type="button" className="secondary" disabled={busy || !printer?.characteristic} onClick={()=>void printTest()}>列印固定測試收據</button></div></form>
           <p className="hint">手機暫存只保存在目前瀏覽器／裝置；清除網站資料或更換裝置可能導致暫存遺失。暫存內容不會出現在後台，直到按下「上傳系統」。</p>
         </article>
         <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.length} 項</p></div></div>

@@ -7,7 +7,7 @@
 - 安裝式 PWA manifest 與 Service Worker。
 - Web Bluetooth 掃描/選取 BLE 裝置，連接 GATT 可寫入 characteristic，分段傳送 ESC/POS 測試收據。
 - 收據文字由伺服器以 `iconv-lite` 編碼成 Big5；8 cm 紙寬以收據版面呈現。
-- 每位使用者的打印機偏好（裝置 ID/名稱）存入 SQLite，跨工作階段保留。
+- 打印機偏好（裝置 ID/名稱）同時存入瀏覽器 IndexedDB 及伺服器 SQLite；在支援 `navigator.bluetooth.getDevices()` 的瀏覽器中，會嘗試恢復先前授權的裝置。
 - WebAuthn Passkey 註冊與登入；登入成功、失敗、登出均寫入 SQLite。
 - 事件建立，支援多張圖片及多段影片上傳，metadata 與檔案持久化。
 - 工作記錄管理；排程每天午夜建立每日工作記錄，啟動時補上當日缺漏。
@@ -69,7 +69,7 @@ npm start
 
 ## 限制及後續工作
 
-- Web Bluetooth 不允許網站任意掃描或在沒有使用者手勢/授權時靜默重新連線。瀏覽器保存的裝置 ID 不是可跨裝置/瀏覽器重用的永久硬體識別碼；使用者可能需要再次選取。
+- Web Bluetooth 不允許網站任意掃描或在沒有使用者手勢/授權時靜默重新連線。瀏覽器 IndexedDB 保存的裝置 ID 不是可跨裝置/瀏覽器重用的永久硬體識別碼；若瀏覽器不提供 `getDevices()` 或授權被撤銷，使用者可能需要再次選取。
 - BLE 服務 UUID 目前列出常見候選值，不能涵蓋所有廠牌。若打印機使用專有 UUID，需加入該 UUID；部分裝置需要特定封包格式、MTU/流控或廠商指令。
 - Big5 編碼端已建立，但收據打印的中文正確性需在實際打印機上驗證；調整 code-page index、行寬、字型、切紙指令以符合硬體。
 - SQLite 與媒體資料是持久化的，但部署時仍須設定備份、磁碟配額、媒體存取權限及保留政策。

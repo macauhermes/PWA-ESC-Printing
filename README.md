@@ -1,11 +1,11 @@
 # PWA ESC Printing
 
-繁體中文 PWA：BLE 熱敏打印、固定測試收據、Passkey/WebAuthn 登入、手機本機事件暫存與按需上傳、設備工作記錄及 Web Push。
+繁體中文 PWA：一般用戶 BLE 熱敏打印與模擬付款測試收據、Passkey/WebAuthn 登入、手機本機事件暫存與按需上傳、設備工作記錄及跨平台 Web Push。
 
 ## 功能
 
 - 安裝式 PWA manifest 與 Service Worker。
-- Web Bluetooth 掃描/選取 BLE 裝置，連接 GATT 可寫入 characteristic，分段傳送 ESC/POS 測試收據。
+- 一般用戶在單一「打印」頁重複選取／切換 BLE 裝置、連接 GATT 可寫入 characteristic，並打印較完整的雙欄模擬付款測試收據；可輸入備註，備註會打印在收據上。
 - 收據文字由伺服器以 `iconv-lite` 編碼成 Big5；8 cm 紙寬以收據版面呈現。
 - 打印機偏好（裝置 ID/名稱）同時存入瀏覽器 IndexedDB 及伺服器 SQLite；在支援 `navigator.bluetooth.getDevices()` 的瀏覽器中，會嘗試恢復先前授權的裝置。
 - WebAuthn Passkey 註冊與登入；登入成功、失敗、登出均寫入 SQLite。
@@ -14,7 +14,7 @@
 - Web Push 訂閱、測試推播；管理員可對指定已訂閱設備推播，或廣播給所有已訂閱設備，同時保留站內通知。
 - 登入歷史及操作稽核頁面。
 - 「通知」頁集中管理員通知發送：可指定已訂閱設備或廣播所有已訂閱設備；管理員不顯示自己的通知收件匣。
-- 「用戶管理」頁管理用戶及查看客戶端在線、打印機與 Bluetooth 狀態。
+- 「用戶管理」頁管理用戶及查看客戶端在線狀態；管理員介面不提供打印頁、選取打印機或打印操作。
 - 獨立的「設備工作記錄」管理頁列出所有設備已上傳的工作記錄及媒體附件，管理員可永久刪除記錄與檔案；客戶端工作記錄列表每 3 秒同步刷新，刪除後會自動消失。
 - 管理員導覽列不顯示「事件管理」，一般用戶仍可建立本機暫存事件並按需上傳。
 - 客戶端通知中心：管理員可廣播所有客戶端或指定已識別客戶端；通知和各客戶端的已讀狀態保存於 SQLite，客戶端每 3 秒輪詢更新，離線後重新連線仍可查看。
@@ -24,7 +24,7 @@
 ## 需求
 
 - Node.js 20+（建議 LTS）及 npm。
-- 支援 Web Bluetooth 的 Chromium 瀏覽器（桌面 Chrome/Edge 或相容 Android 瀏覽器）。iOS Safari 通常不支援 Web Bluetooth。
+- BLE 打印需使用支援 Web Bluetooth 的 Chromium 瀏覽器（桌面 Chrome/Edge 或相容 Android 瀏覽器）；iOS Safari 不支援 Web Bluetooth。Web Push 可在 Android 支援 Push API 的瀏覽器使用；iPhone／iPad 需 iOS/iPadOS 16.4 或更新版本，先將網站加入主畫面，再從主畫面開啟 Web App。
 - Web Bluetooth、WebAuthn、Service Worker、Push API 在正式環境通常需要 HTTPS；localhost 可用於開發。
 - BLE 熱敏打印機必須提供可寫入的 GATT characteristic。許多打印機使用專有服務 UUID、私有協定或只支援藍牙 Classic SPP；此類設備不能保證可由 Web Bluetooth 直接打印。
 - Big5 字元集與 ESC/POS 的 code-page 編號是兩件事。打印機必須有相符的 Big5 字型/字碼表，且不同廠牌的 `ESC t n` 編號可能不同；目前預設 index 0 只是一個保守預設，需按打印機手冊調整。
@@ -55,7 +55,7 @@ npm run dev
 - `ADMIN_USERNAME` 與 `ADMIN_PASSWORD`: 唯一管理員的固定登入憑證，僅放在伺服器環境變數，不要放入前端程式或提交真實 `.env` 到 GitHub。
 - 設定反向代理 HTTPS、備份 SQLite 及 uploads，限制管理端點的網路存取。
 
-手機用戶在「事件管理」可為每個事件選擇多張圖片或多段影片。按「暫存於手機」會把事件文字和媒體 Blob 保存在 IndexedDB，按「上傳事件及附件」或「直接上傳」才會提交伺服器；上傳成功後，手機草稿才會移除。清除網站資料或更換瀏覽器／設備仍可能導致本機草稿遺失。伺服器接受每個事件最多 20 個媒體檔案、單檔最大 100 MB；部署時請確認反向代理、磁碟空間及網絡限制允許相應大小。管理員可在「設備工作記錄」獨立頁查看所有設備工作記錄及媒體連結，並刪除記錄；客戶端每 3 秒重新讀取自己的上傳清單，刪除後會同步更新。測試打印位於獨立的「測試打印」頁面，始終只輸出固定測試收據。
+手機用戶在「事件管理」可為每個事件選擇多張圖片或多段影片。按「暫存於手機」會把事件文字和媒體 Blob 保存在 IndexedDB，按「上傳事件及附件」或「直接上傳」才會提交伺服器；上傳成功後，手機草稿才會移除。清除網站資料或更換瀏覽器／設備仍可能導致本機草稿遺失。伺服器接受每個事件最多 20 個媒體檔案、單檔最大 100 MB；部署時請確認反向代理、磁碟空間及網絡限制允許相應大小。管理員可在「設備工作記錄」獨立頁查看所有設備工作記錄及媒體連結，並刪除記錄；客戶端每 3 秒重新讀取自己的上傳清單，刪除後會同步更新。一般用戶的「打印」頁只會打印標示為非真實交易的模擬付款收據，並可把備註加入收據；管理員帳號不提供打印功能。
 
 ## Web Push
 
@@ -65,7 +65,7 @@ npm run dev
 npx web-push generate-vapid-keys
 ```
 
-將 public/private key 與 `VAPID_SUBJECT` 放入 `.env`，重新啟動伺服器。登入後在「藍牙打印」頁按「啟用推播並測試」，授予瀏覽器通知權限。推播需要 HTTPS 和支援 Push API 的瀏覽器。
+將 public/private key 與 `VAPID_SUBJECT` 放入 `.env`，重新啟動伺服器。登入一般用戶帳號後，進入「通知」頁並按「啟用／修復推播訂閱」，在瀏覽器／系統提示時允許通知。按鈕會先處理通知權限，再建立或重用 Push 訂閱並發送測試通知。推播需要 HTTPS、有效 VAPID 金鑰及支援 Push API 的瀏覽器。iPhone／iPad 必須先在 Safari 使用「分享」→「加入主畫面」，再從主畫面圖示開啟 Web App；直接在 Safari 分頁中開啟時，系統會提示安裝要求。Android 請使用最新版 Chrome 或其他支援 Web Push 的瀏覽器，並允許通知。
 
 ## 生產建置
 

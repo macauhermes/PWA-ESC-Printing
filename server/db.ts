@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS client_status (
   printer_name TEXT, printer_id TEXT, user_agent TEXT, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_client_status_last_seen ON client_status(last_seen DESC);
+CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL);
 `);
 
 const sessionColumns = db.pragma('table_info(sessions)') as { name: string }[];

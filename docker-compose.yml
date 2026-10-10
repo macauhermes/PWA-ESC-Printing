@@ -1,18 +1,45 @@
-# docker setup for Next.js app
-networks:
-    default:
-        external: true
-        name: db_default
-
 services:
-    app:
-        restart: always
-        build:
-            context: ./
-            dockerfile: ./Dockerfile
-        environment:
-            - VIRTUAL_HOST=pwa.jasonhoi.com
-            - VIRTUAL_PORT=3000
-            - VIRTUAL_PROTO=http
-            - LETSENCRYPT_HOST=pwa.jasonhoi.com
-            - LETSENCRYPT_EMAIL=admin@de3server.com
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pwa-esc-printing:latest
+    container_name: pwa-esc-printing
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "8787"
+      APP_ORIGIN: https://pwa.jasonhoi.com
+      RP_ID: pwa.jasonhoi.com
+      DATABASE_PATH: /app/data/app.sqlite
+      UPLOAD_DIR: /app/uploads
+      VIRTUAL_HOST: pwa.jasonhoi.com
+      VIRTUAL_PORT: "8787"
+      VIRTUAL_PROTO: http
+      LETSENCRYPT_HOST: pwa.jasonhoi.com
+      LETSENCRYPT_EMAIL: admin@de3server.com
+      TZ: Asia/Singapore
+    volumes:
+      - app-data:/app/data
+      - app-uploads:/app/uploads
+    expose:
+      - "8787"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - proxy
+
+volumes:
+  app-data:
+  app-uploads:
+
+networks:
+  proxy:
+    external: true
+    name: db_default

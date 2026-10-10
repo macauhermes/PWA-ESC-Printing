@@ -236,7 +236,9 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
   const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();
   const jobs = db.prepare('SELECT * FROM daily_jobs ORDER BY created_at DESC LIMIT 200').all();
   const deviceWork = db.prepare(`SELECT w.id,w.client_id AS clientId,w.user_id AS userId,w.username,w.title,w.content,w.event_date AS eventDate,w.created_at AS createdAt,w.printer_name AS printerName
-    FROM client_work w ORDER BY w.created_at DESC LIMIT 1000`).all();
+    FROM client_work w ORDER BY w.created_at DESC LIMIT 1000`).all() as any[];
+  const workMedia = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
+  for (const work of deviceWork) work.media = workMedia.filter(m => m.workId === work.id).map(m => ({ ...m, url: '/uploads/' + m.filename }));
   res.json({ users, clients, operations, jobs, deviceWork, serverTime: new Date().toISOString() });
 });
 app.post('/api/admin/users/:id/role', auth, requireAdmin, (req: any, res) => {
@@ -270,7 +272,7 @@ app.post('/api/admin/clients/:clientId/logout', auth, requireAdmin, (req: any, r
   audit(req.user, 'admin.client_forced_logout', 'client', clientId, { username: client.username });
   res.json({ ok: true });
 });
-app.post('/api/admin/notifications', auth, requireAdmin, (req: any, res) => {
+app.post('/api/admin/notifications', auth, requireAdmin, async (req: any, res) => {
   const title = String(req.body.title || '').trim().slice(0, 200);
   const body = String(req.body.body || '').trim().slice(0, 5000);
   const target = String(req.body.targetClientId || '').trim().slice(0, 128) || null;
@@ -278,8 +280,26 @@ app.post('/api/admin/notifications', auth, requireAdmin, (req: any, res) => {
   if (target && !db.prepare('SELECT client_id FROM client_status WHERE client_id=?').get(target)) return res.status(404).json({ error: 'Client not found' });
   const notificationId = id();
   db.prepare('INSERT INTO notifications(id,title,body,target_client_id,created_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP)').run(notificationId, title, body, target);
-  audit(req.user, 'admin.notification_sent', 'notification', notificationId, { targetClientId: target });
-  res.status(201).json({ ok: true, id: notificationId });
+  let pushSent = 0, pushTotal = 0, pushConfigured = Boolean(process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY);
+  if (pushConfigured) {
+    const subs = (target
+      ? db.prepare('SELECT id,subscription_json FROM push_subscriptions WHERE client_id=?').all(target)
+      : db.prepare('SELECT id,subscription_json FROM push_subscriptions').all()) as { id:string; subscription_json:string }[];
+    pushTotal = subs.length;
+    const results = await Promise.allSettled(subs.map(async sub => {
+      try {
+        await webpush.sendNotification(JSON.parse(sub.subscription_json), JSON.stringify({ title, body, url: '/', notificationId }));
+        pushSent++;
+      } catch (err: any) {
+        if (err?.statusCode === 404 || err?.statusCode === 410) db.prepare('DELETE FROM push_subscriptions WHERE id=?').run(sub.id);
+        throw err;
+      }
+    }));
+    const failures = results.filter(r => r.status === 'rejected').length;
+    audit(req.user, 'admin.notification_push', 'notification', notificationId, { targetClientId: target, pushSent, pushTotal, failures });
+  }
+  audit(req.user, 'admin.notification_sent', 'notification', notificationId, { targetClientId: target, pushSent, pushTotal, pushConfigured });
+  res.status(201).json({ ok: true, id: notificationId, pushSent, pushTotal, pushConfigured, message: pushConfigured ? `應用程式推播已送出 ${pushSent}/${pushTotal} 個訂閱端點；站內通知亦已保存。` : '站內通知已保存；未設定 VAPID 金鑰，未發送系統推播。' });
 });
 
 app.post('/api/admin/operations', auth, requireAdmin, (req: any, res) => {
@@ -323,23 +343,36 @@ const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024, files: 2
 // Mobile clients may keep work locally and upload it only when requested.
 app.get('/api/work', auth, (req: any, res) => {
   const clientId = String(req.user.client_id || '').slice(0, 128);
-  if (!clientId) return res.json([]);
-  const rows = db.prepare('SELECT id,client_id AS clientId,title,content,event_date AS eventDate,created_at AS createdAt FROM client_work WHERE client_id=? ORDER BY created_at DESC LIMIT 500').all(clientId);
-  res.json(rows);
+  if (!clientId) return res.status(409).json({ error: '客戶端尚未初始化；請等待裝置心跳完成後再載入工作記錄。' });
+  const rows = db.prepare('SELECT id,client_id AS clientId,title,content,event_date AS eventDate,created_at AS createdAt FROM client_work WHERE client_id=? ORDER BY created_at DESC LIMIT 500').all(clientId) as any[];
+  const media = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
+  res.json(rows.map(w => ({ ...w, media: media.filter(m => m.workId === w.id).map(m => ({ ...m, url: '/uploads/' + m.filename })) })));
 });
-app.post('/api/work', auth, (req: any, res) => {
+app.post('/api/work', auth, upload.array('media', 20), (req: any, res) => {
   const clientId = String(req.user.client_id || '').slice(0, 128);
   const title = String(req.body.title || '').trim().slice(0, 200);
   const content = String(req.body.content || '').trim().slice(0, 10000);
   const eventDate = String(req.body.eventDate || '').trim().slice(0, 40) || null;
-  if (!clientId) return res.status(409).json({ error: '客戶端尚未初始化，請稍後再試' });
-  if (!title) return res.status(400).json({ error: '事件標題不可為空' });
+  const files = (req.files || []) as Express.Multer.File[];
+  if (!clientId) {
+    for (const file of files) try { fs.unlinkSync(file.path); } catch {}
+    return res.status(409).json({ error: '客戶端尚未初始化；請等待裝置心跳完成後再上傳。' });
+  }
+  if (!title) {
+    for (const file of files) try { fs.unlinkSync(file.path); } catch {}
+    return res.status(400).json({ error: '事件標題不可為空' });
+  }
   const workId = id();
   const printerName = (db.prepare('SELECT printer_name FROM client_status WHERE client_id=?').get(clientId) as { printer_name?: string } | undefined)?.printer_name || null;
-  db.prepare('INSERT INTO client_work(id,client_id,user_id,username,title,content,event_date,printer_name) VALUES(?,?,?,?,?,?,?,?)')
-    .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate, printerName);
-  audit(req.user, 'client.work_uploaded', 'client_work', workId, { clientId, title, printerName });
-  res.status(201).json({ id: workId, clientId, title, content, eventDate, printerName, createdAt: new Date().toISOString() });
+  const transaction = db.transaction(() => {
+    db.prepare('INSERT INTO client_work(id,client_id,user_id,username,title,content,event_date,printer_name) VALUES(?,?,?,?,?,?,?,?)')
+      .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate, printerName);
+    for (const file of files) db.prepare('INSERT INTO work_media(id,work_id,kind,filename,mime_type,original_name) VALUES(?,?,?,?,?,?)')
+      .run(id(), workId, file.mimetype.startsWith('image/') ? 'image' : 'video', file.filename, file.mimetype, file.originalname);
+  });
+  try { transaction(); } catch (err) { for (const file of files) try { fs.unlinkSync(file.path); } catch {}; throw err; }
+  audit(req.user, 'client.work_uploaded', 'client_work', workId, { clientId, title, printerName, mediaCount: files.length });
+  res.status(201).json({ id: workId, clientId, title, content, eventDate, printerName, mediaCount: files.length, createdAt: new Date().toISOString() });
 });
 
 app.get('/api/events', auth, (req: any, res) => {
@@ -444,9 +477,15 @@ app.post('/api/printer-action', auth, (req: any, res) => {
 
 app.post('/api/push/subscribe', auth, (req: any, res) => {
   if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return res.status(503).json({ error: 'Web Push VAPID keys are not configured' });
-  const sid = id();
-  db.prepare('INSERT INTO push_subscriptions(id,user_id,subscription_json) VALUES(?,?,?)').run(sid, req.user.id, JSON.stringify(req.body));
-  audit(req.user, 'push.subscribed', 'push_subscription', sid); res.json({ ok: true });
+  const clientId = String(req.user.client_id || '').slice(0, 128);
+  if (!clientId) return res.status(409).json({ error: '裝置尚未初始化；請稍後再啟用推播。' });
+  const subscription = req.body;
+  if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) return res.status(400).json({ error: 'Invalid Web Push subscription payload' });
+  const existing = db.prepare('SELECT id FROM push_subscriptions WHERE client_id=? AND json_extract(subscription_json,\'$.endpoint\')=?').get(clientId, subscription.endpoint) as { id:string } | undefined;
+  const sid = existing?.id || id();
+  if (existing) db.prepare('UPDATE push_subscriptions SET user_id=?,subscription_json=? WHERE id=?').run(req.user.id, JSON.stringify(subscription), sid);
+  else db.prepare('INSERT INTO push_subscriptions(id,user_id,client_id,subscription_json) VALUES(?,?,?,?)').run(sid, req.user.id, clientId, JSON.stringify(subscription));
+  audit(req.user, 'push.subscribed', 'push_subscription', sid, { clientId }); res.json({ ok: true, clientId });
 });
 app.post('/api/push/test', auth, async (req: any, res) => {
   if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) return res.status(503).json({ error: 'Web Push VAPID keys are not configured' });

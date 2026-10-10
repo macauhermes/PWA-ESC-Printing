@@ -1,0 +1,18 @@
+# docker setup for Next.js app
+networks:
+    default:
+        external: true
+        name: db_default
+
+services:
+    app:
+        restart: always
+        build:
+            context: ./
+            dockerfile: ./Dockerfile
+        environment:
+            - VIRTUAL_HOST=pwa.jasonhoi.com
+            - VIRTUAL_PORT=3000
+            - VIRTUAL_PROTO=http
+            - LETSENCRYPT_HOST=pwa.jasonhoi.com
+            - LETSENCRYPT_EMAIL=admin@de3server.com

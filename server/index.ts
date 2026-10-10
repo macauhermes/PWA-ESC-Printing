@@ -192,8 +192,7 @@ app.post('/api/records/clear', auth, (req: any, res) => {
         db.prepare('DELETE FROM media').run(); db.prepare('DELETE FROM events').run();
         counts.events = eventCount; counts.media = mediaCount;
       } else if (category === 'jobs') {
-        counts.jobs = db.prepare('SELECT COUNT(*) AS n FROM daily_jobs').get() as any;
-        counts.jobs = counts.jobs.n; db.prepare('DELETE FROM daily_jobs').run();
+        counts.jobs = (db.prepare('SELECT COUNT(*) AS n FROM daily_jobs').get() as any).n; db.prepare('DELETE FROM daily_jobs').run();
       } else if (category === 'logins') {
         counts.logins = (db.prepare('SELECT COUNT(*) AS n FROM login_events').get() as any).n;
         db.prepare('DELETE FROM login_events').run();

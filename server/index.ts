@@ -168,6 +168,49 @@ app.delete('/api/events/:id', auth, (req: any, res) => {
   db.prepare('DELETE FROM events WHERE id=?').run(req.params.id);
   audit(req.user, 'event.deleted', 'event', req.params.id); res.json({ ok: true });
 });
+app.post('/api/records/clear', auth, (req: any, res) => {
+  const requested = Array.isArray(req.body.categories) ? req.body.categories.map(String) : [];
+  const allowed = new Set(['events', 'jobs', 'logins', 'printer_preferences', 'push_subscriptions']);
+  const invalid = requested.filter((c: string) => !allowed.has(c));
+  if (invalid.length) return res.status(400).json({ error: `Unsupported record categories: ${invalid.join(', ')}` });
+  const counts: Record<string, number> = {};
+  const removeMediaFiles = () => {
+    const rows = db.prepare('SELECT filename FROM media').all() as { filename: string }[];
+    for (const row of rows) {
+      const target = path.resolve(uploadDir, row.filename);
+      if (target.startsWith(uploadDir + path.sep) && fs.existsSync(target)) {
+        try { fs.unlinkSync(target); } catch (e) { console.error('Unable to delete media file', target, e); }
+      }
+    }
+  };
+  const run = db.transaction(() => {
+    for (const category of requested) {
+      if (category === 'events') {
+        removeMediaFiles();
+        const mediaCount = (db.prepare('SELECT COUNT(*) AS n FROM media').get() as any).n;
+        const eventCount = (db.prepare('SELECT COUNT(*) AS n FROM events').get() as any).n;
+        db.prepare('DELETE FROM media').run(); db.prepare('DELETE FROM events').run();
+        counts.events = eventCount; counts.media = mediaCount;
+      } else if (category === 'jobs') {
+        counts.jobs = db.prepare('SELECT COUNT(*) AS n FROM daily_jobs').get() as any;
+        counts.jobs = counts.jobs.n; db.prepare('DELETE FROM daily_jobs').run();
+      } else if (category === 'logins') {
+        counts.logins = (db.prepare('SELECT COUNT(*) AS n FROM login_events').get() as any).n;
+        db.prepare('DELETE FROM login_events').run();
+      } else if (category === 'printer_preferences') {
+        counts.printer_preferences = (db.prepare('SELECT COUNT(*) AS n FROM printer_preferences').get() as any).n;
+        db.prepare('DELETE FROM printer_preferences').run();
+      } else if (category === 'push_subscriptions') {
+        counts.push_subscriptions = (db.prepare('SELECT COUNT(*) AS n FROM push_subscriptions').get() as any).n;
+        db.prepare('DELETE FROM push_subscriptions').run();
+      }
+    }
+    audit(req.user, 'records.cleared', 'persistent_records', undefined, { categories: requested, deletedCounts: counts });
+  });
+  try { run(); res.json({ ok: true, deletedCounts: counts, auditRetained: true }); }
+  catch (e) { res.status(500).json({ error: e instanceof Error ? e.message : 'Unable to clear records' }); }
+});
+
 app.get('/api/jobs', auth, (req: any, res) => { audit(req.user, 'jobs.listed', 'daily_jobs'); res.json(db.prepare('SELECT * FROM daily_jobs ORDER BY job_date DESC LIMIT 500').all()); });
 app.post('/api/jobs', auth, (req: any, res) => {
   const title = String(req.body.title || '').trim();

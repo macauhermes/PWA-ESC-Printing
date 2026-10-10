@@ -382,7 +382,23 @@ app.post('/api/push/test', auth, async (req: any, res) => {
   res.json({ sent: result.filter(r => r.status === 'fulfilled').length, total: subs.length });
 });
 
-app.get('/api/notifications', auth, (req: any, res) => { res.json([]); });
+app.get('/api/notifications', auth, (req: any, res) => {
+  const clientId = String(req.user.client_id || '').slice(0, 128);
+  if (!clientId) return res.status(409).json({ error: 'Client session not initialized' });
+  const rows = db.prepare(`SELECT n.id,n.title,n.body,n.target_client_id AS targetClientId,n.created_at AS createdAt,
+    CASE WHEN r.notification_id IS NULL THEN 0 ELSE 1 END AS isRead,r.read_at AS readAt
+    FROM notifications n LEFT JOIN notification_reads r ON r.notification_id=n.id AND r.client_id=?
+    WHERE n.target_client_id IS NULL OR n.target_client_id=?
+    ORDER BY n.created_at DESC LIMIT 500`).all(clientId, clientId);
+  res.json(rows);
+});
+app.post('/api/notifications/:id/read', auth, (req: any, res) => {
+  const clientId = String(req.user.client_id || '').slice(0, 128);
+  const row = db.prepare('SELECT id FROM notifications WHERE id=? AND (target_client_id IS NULL OR target_client_id=?)').get(req.params.id, clientId);
+  if (!row) return res.status(404).json({ error: 'Notification not found' });
+  db.prepare('INSERT OR IGNORE INTO notification_reads(notification_id,client_id) VALUES(?,?)').run(req.params.id, clientId);
+  res.json({ ok: true });
+});
 
 const requireIconv = () => iconvLite;
 

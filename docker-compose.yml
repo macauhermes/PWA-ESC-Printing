@@ -22,8 +22,8 @@ services:
       LETSENCRYPT_EMAIL: admin@de3server.com
       TZ: Asia/Singapore
     volumes:
-      - app-data:/app/data
-      - app-uploads:/app/uploads
+      - ./app-data:/app/data
+      - ./app-uploads:/app/uploads
     expose:
       - "8787"
     healthcheck:
@@ -34,10 +34,6 @@ services:
       start_period: 15s
     networks:
       - proxy
-
-volumes:
-  app-data:
-  app-uploads:
 
 networks:
   proxy:

@@ -228,7 +228,7 @@ app.post('/api/admin/notifications', auth, requireAdmin, (req: any, res) => {
   if (!title || !body) return res.status(400).json({ error: 'Title and body are required' });
   if (target && !db.prepare('SELECT client_id FROM client_status WHERE client_id=?').get(target)) return res.status(404).json({ error: 'Client not found' });
   const notificationId = id();
-  db.prepare('INSERT INTO notifications(id,title,body,target_client_id) VALUES(?,?,?,?)').run(notificationId, title, body, target);
+  db.prepare('INSERT INTO notifications(id,title,body,target_client_id,created_at) VALUES(?,?,?,?,CURRENT_TIMESTAMP)').run(notificationId, title, body, target);
   audit(req.user, 'admin.notification_sent', 'notification', notificationId, { targetClientId: target });
   res.status(201).json({ ok: true, id: notificationId });
 });

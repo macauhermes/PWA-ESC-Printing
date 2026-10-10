@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS challenges (
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at INTEGER NOT NULL
+  client_id TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, expires_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS login_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT REFERENCES users(id), username TEXT NOT NULL,
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS media (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS daily_jobs (
-  id TEXT PRIMARY KEY, job_date TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+  id TEXT PRIMARY KEY, job_date TEXT NOT NULL, title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'created', detail TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -59,4 +59,27 @@ CREATE TABLE IF NOT EXISTS printer_preferences (
 CREATE INDEX IF NOT EXISTS idx_login_events_created ON login_events(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC);
+CREATE TABLE IF NOT EXISTS client_status (
+  client_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  username TEXT NOT NULL, online INTEGER NOT NULL DEFAULT 0, bluetooth_supported INTEGER NOT NULL DEFAULT 0,
+  bluetooth_connected INTEGER NOT NULL DEFAULT 0, printer_connected INTEGER NOT NULL DEFAULT 0,
+  printer_name TEXT, printer_id TEXT, user_agent TEXT, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_client_status_last_seen ON client_status(last_seen DESC);
 `);
+
+const sessionColumns = db.pragma('table_info(sessions)') as { name: string }[];
+if (!sessionColumns.some(c => c.name === 'client_id')) db.exec('ALTER TABLE sessions ADD COLUMN client_id TEXT');
+const jobsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='daily_jobs'").get() as { sql: string } | undefined;
+if (jobsTable?.sql && /job_date\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(jobsTable.sql)) {
+  db.exec(`CREATE TABLE daily_jobs_new (
+    id TEXT PRIMARY KEY, job_date TEXT NOT NULL, title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'created', detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  INSERT INTO daily_jobs_new(id,job_date,title,status,detail,created_at) SELECT id,job_date,title,status,detail,created_at FROM daily_jobs;
+  DROP TABLE daily_jobs;
+  ALTER TABLE daily_jobs_new RENAME TO daily_jobs;
+  CREATE INDEX IF NOT EXISTS idx_daily_jobs_created ON daily_jobs(created_at DESC);`);
+}
+

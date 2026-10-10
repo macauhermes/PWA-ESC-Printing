@@ -59,6 +59,10 @@ const requireAdmin = (req: any, res: any, next: any) => {
   }
   next();
 };
+const requireRegularUser = (req: any, res: any, next: any) => {
+  if (req.user?.role === 'admin') return res.status(403).json({ error: '打印功能只供一般用戶使用。' });
+  next();
+};
 const challenge = (kind: string, value: string) => {
   const cid = id();
   db.prepare('INSERT INTO challenges(id,challenge,kind,expires_at) VALUES(?,?,?,?)').run(cid, value, kind, Date.now() + 5 * 60_000);
@@ -237,7 +241,7 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
   const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();
   const jobs = db.prepare('SELECT * FROM daily_jobs ORDER BY created_at DESC LIMIT 200').all();
   const deviceWork = db.prepare(`SELECT w.id,w.client_id AS clientId,w.user_id AS userId,w.username,w.title,w.content,w.event_date AS eventDate,w.created_at AS createdAt,w.printer_name AS printerName
-    undefined`).all() as any[];
+    FROM client_work w ORDER BY w.created_at DESC`).all() as any[];
   const workMedia = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   for (const work of deviceWork) work.media = workMedia.filter(m => m.workId === work.id).map(m => ({ ...m, url: '/uploads/' + m.filename }));
   res.json({ users, clients, operations, jobs, deviceWork, serverTime: new Date().toISOString() });
@@ -354,7 +358,7 @@ const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024, files: 2
 app.get('/api/work', auth, (req: any, res) => {
   const clientId = String(req.user.client_id || '').slice(0, 128);
   if (!clientId) return res.status(409).json({ error: '客戶端尚未初始化；請等待裝置心跳完成後再載入工作記錄。' });
-  const rows = db.prepare('SELECT id,client_id AS clientId,title,content,event_date AS eventDate,created_at AS createdAt undefined').all(clientId) as any[];
+  const rows = db.prepare('SELECT id,client_id AS clientId,user_id AS userId,username,title,content,event_date AS eventDate,created_at AS createdAt,printer_name AS printerName FROM client_work WHERE client_id=? ORDER BY created_at DESC').all(clientId) as any[];
   const media = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   res.json(rows.map(w => ({ ...w, media: media.filter(m => m.workId === w.id).map(m => ({ ...m, url: '/uploads/' + m.filename })) })));
 });
@@ -495,14 +499,14 @@ function createDailyJob() {
 createDailyJob();
 cron.schedule('0 0 * * *', createDailyJob, { timezone: process.env.TZ || 'Asia/Singapore' });
 
-app.post('/api/printer-preference', auth, (req: any, res) => {
+app.post('/api/printer-preference', auth, requireRegularUser, (req: any, res) => {
   const { deviceId, deviceName } = req.body;
   db.prepare('INSERT INTO printer_preferences(user_id,device_id,device_name,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO UPDATE SET device_id=excluded.device_id,device_name=excluded.device_name,updated_at=CURRENT_TIMESTAMP')
     .run(req.user.id, deviceId || null, deviceName || null);
   audit(req.user, 'printer.preference_saved', 'printer', deviceId, { deviceName }); res.json({ ok: true });
 });
-app.get('/api/printer-preference', auth, (req: any, res) => res.json(db.prepare('SELECT device_id AS deviceId,device_name AS deviceName,updated_at AS updatedAt FROM printer_preferences WHERE user_id=?').get(req.user.id) || null));
-app.post('/api/printer-action', auth, (req: any, res) => {
+app.get('/api/printer-preference', auth, requireRegularUser, (req: any, res) => res.json(db.prepare('SELECT device_id AS deviceId,device_name AS deviceName,updated_at AS updatedAt FROM printer_preferences WHERE user_id=?').get(req.user.id) || null));
+app.post('/api/printer-action', auth, requireRegularUser, (req: any, res) => {
   const action = String(req.body.action || 'unknown');
   if (!['connected', 'disconnected', 'connection_failed'].includes(action)) return res.status(400).json({ error: 'Invalid printer action' });
   audit(req.user, 'printer.' + action, 'printer', String(req.body.deviceId || ''), { deviceName: String(req.body.deviceName || ''), detail: String(req.body.detail || '') });
@@ -549,7 +553,7 @@ app.post('/api/notifications/:id/read', auth, (req: any, res) => {
 
 const requireIconv = () => iconvLite;
 
-app.post('/api/receipt/encode', auth, (req: any, res) => {
+app.post('/api/receipt/encode', auth, requireRegularUser, (req: any, res) => {
   const iconv = requireIconv();
   const text = String(req.body.text || '');
   // Big5 is the requested encoding. Printer ESC/POS code-page number is firmware-specific;
@@ -558,7 +562,7 @@ app.post('/api/receipt/encode', auth, (req: any, res) => {
   audit(req.user, 'receipt.encoded', 'receipt', undefined, { encoding: 'Big5', byteLength: bytes.length });
   res.json({ base64: bytes.toString('base64'), encoding: 'Big5', codePageIndex: Number.isInteger(req.body.codePageIndex) ? req.body.codePageIndex : 0 });
 });
-app.post('/api/receipt/print-log', auth, (req: any, res) => {
+app.post('/api/receipt/print-log', auth, requireRegularUser, (req: any, res) => {
   audit(req.user, 'receipt.print_requested', 'receipt', undefined, { printerName: String(req.body.printerName || ''), receiptType: 'test', status: String(req.body.status || 'submitted') });
   res.json({ ok: true });
 });
@@ -567,4 +571,10 @@ if (fs.existsSync(path.resolve('dist'))) {
   app.use(express.static(path.resolve('dist')));
   app.get(/^(?!\/api(?:\/|$)|\/uploads(?:\/|$)).*/, (_req, res) => res.sendFile(path.resolve('dist/index.html')));
 }
+app.use((err: any, _req: any, res: any, _next: any) => {
+  console.error('Unhandled request error:', err);
+  if (res.headersSent) return;
+  res.status(500).json({ error: '伺服器發生內部錯誤，請查看伺服器日誌。' });
+});
+
 app.listen(port, () => console.log(`PWA ESC Printing API listening on :${port}`));

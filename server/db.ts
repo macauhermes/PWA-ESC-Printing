@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS media (
   kind TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL, original_name TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS client_work (
+  id TEXT PRIMARY KEY, client_id TEXT NOT NULL, user_id TEXT NOT NULL, username TEXT NOT NULL,
+  title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', event_date TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_client_work_client_created ON client_work(client_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS daily_jobs (
   id TEXT PRIMARY KEY, job_date TEXT NOT NULL, title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'created', detail TEXT NOT NULL DEFAULT '',

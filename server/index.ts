@@ -235,8 +235,8 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     c.user_agent AS userAgent,c.last_seen AS lastSeen FROM client_status c ORDER BY c.last_seen DESC`).all();
   const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();
   const jobs = db.prepare('SELECT * FROM daily_jobs ORDER BY created_at DESC LIMIT 200').all();
-  const deviceWork = db.prepare(`SELECT w.id,w.client_id AS clientId,w.user_id AS userId,w.username,w.title,w.content,w.event_date AS eventDate,w.created_at AS createdAt,c.printer_name AS printerName
-    FROM client_work w LEFT JOIN client_status c ON c.client_id=w.client_id ORDER BY w.created_at DESC LIMIT 1000`).all();
+  const deviceWork = db.prepare(`SELECT w.id,w.client_id AS clientId,w.user_id AS userId,w.username,w.title,w.content,w.event_date AS eventDate,w.created_at AS createdAt,w.printer_name AS printerName
+    FROM client_work w ORDER BY w.created_at DESC LIMIT 1000`).all();
   res.json({ users, clients, operations, jobs, deviceWork, serverTime: new Date().toISOString() });
 });
 app.post('/api/admin/users/:id/role', auth, requireAdmin, (req: any, res) => {
@@ -335,10 +335,11 @@ app.post('/api/work', auth, (req: any, res) => {
   if (!clientId) return res.status(409).json({ error: '客戶端尚未初始化，請稍後再試' });
   if (!title) return res.status(400).json({ error: '事件標題不可為空' });
   const workId = id();
-  db.prepare('INSERT INTO client_work(id,client_id,user_id,username,title,content,event_date) VALUES(?,?,?,?,?,?,?)')
-    .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate);
-  audit(req.user, 'client.work_uploaded', 'client_work', workId, { clientId, title });
-  res.status(201).json({ id: workId, clientId, title, content, eventDate, createdAt: new Date().toISOString() });
+  const printerName = (db.prepare('SELECT printer_name FROM client_status WHERE client_id=?').get(clientId) as { printer_name?: string } | undefined)?.printer_name || null;
+  db.prepare('INSERT INTO client_work(id,client_id,user_id,username,title,content,event_date,printer_name) VALUES(?,?,?,?,?,?,?,?)')
+    .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate, printerName);
+  audit(req.user, 'client.work_uploaded', 'client_work', workId, { clientId, title, printerName });
+  res.status(201).json({ id: workId, clientId, title, content, eventDate, printerName, createdAt: new Date().toISOString() });
 });
 
 app.get('/api/events', auth, (req: any, res) => {

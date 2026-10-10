@@ -66,6 +66,16 @@ CREATE TABLE IF NOT EXISTS client_status (
   printer_name TEXT, printer_id TEXT, user_agent TEXT, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_client_status_last_seen ON client_status(last_seen DESC);
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY, target_client_id TEXT, title TEXT NOT NULL, body TEXT NOT NULL,
+  created_by TEXT, created_by_username TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
+CREATE TABLE IF NOT EXISTS notification_reads (
+  notification_id TEXT NOT NULL REFERENCES notifications(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL, read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(notification_id, client_id)
+);
 `);
 
 const sessionColumns = db.pragma('table_info(sessions)') as { name: string }[];

@@ -63,6 +63,7 @@ app.post('/api/auth/register/options', async (req, res) => {
   let user = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
   if (!user) { user = { id: id(), username, display_name: displayName, role: 'user' }; db.prepare('INSERT INTO users(id,username,display_name) VALUES(?,?,?)').run(user.id, username, displayName); }
   const existing = db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[];
+  if (existing.length > 0) return res.status(409).json({ error: 'This username already has a passkey. Ask an administrator to add another authenticator.' });
   const options = await awaitRegistrationOptions(user, existing);
   const cid = challenge('register', options.challenge);
   res.json({ ...options, challengeId: cid, userId: user.id });

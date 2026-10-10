@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, title TEXT NOT NU
 
 const sessionColumns = db.pragma('table_info(sessions)') as { name: string }[];
 if (!sessionColumns.some(c => c.name === 'client_id')) db.exec('ALTER TABLE sessions ADD COLUMN client_id TEXT');
+const notificationColumns = db.pragma('table_info(notifications)') as { name: string }[];
+if (!notificationColumns.some(c => c.name === 'target_client_id')) db.exec('ALTER TABLE notifications ADD COLUMN target_client_id TEXT');
 const jobsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='daily_jobs'").get() as { sql: string } | undefined;
 if (jobsTable?.sql && /job_date\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(jobsTable.sql)) {
   db.exec(`CREATE TABLE daily_jobs_new (

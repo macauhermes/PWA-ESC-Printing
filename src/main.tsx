@@ -32,16 +32,18 @@ function uploadFormDataWithProgress(path: string, token: string, data: FormData,
     const xhr = new XMLHttpRequest();
     let lastLoaded = 0;
     let lastAt = Date.now();
+    let lastSpeed = 0;
     xhr.open('POST', '/api' + path);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.upload.onprogress = event => {
       const now = Date.now();
-      const elapsed = Math.max(1, now - lastAt) / 1000;
-      const delta = Math.max(0, event.loaded - lastLoaded);
-      const bytesPerSecond = delta / elapsed;
-      onProgress({ loaded: event.loaded, total: event.lengthComputable ? event.total : 0, percent: event.lengthComputable && event.total > 0 ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null, bytesPerSecond });
-      lastLoaded = event.loaded;
-      lastAt = now;
+      const elapsed = (now - lastAt) / 1000;
+      if (elapsed >= 0.5) {
+        lastSpeed = Math.max(0, event.loaded - lastLoaded) / elapsed;
+        lastLoaded = event.loaded;
+        lastAt = now;
+      }
+      onProgress({ loaded: event.loaded, total: event.lengthComputable ? event.total : 0, percent: event.lengthComputable && event.total > 0 ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null, bytesPerSecond: lastSpeed });
     };
     xhr.onerror = () => reject(new Error('網絡連線中斷，請檢查網絡後重試。'));
     xhr.onabort = () => reject(new Error('上傳已取消。'));

@@ -7,6 +7,10 @@ type User = { id: string; username: string; displayName: string; role: string };
 type EventItem = { id: string; title: string; content: string; event_date?: string; created_at: string; media: { id: string; kind: string; original_name: string; url: string }[] };
 type Job = { id: string; job_date: string; title: string; status: string; detail: string; created_at: string };
 type Printer = { id: string; name: string; device: BluetoothDevice; characteristic?: BluetoothRemoteGATTCharacteristic };
+type AdminClient = { clientId:string; userId:string; username:string; online:number; bluetoothSupported:number; bluetoothConnected:number; printerConnected:number; printerName?:string; printerId?:string; userAgent?:string; lastSeen:string };
+type AdminUser = { id:string; username:string; displayName:string; role:string; createdAt:string; passkeyCount:number; activeSessions:number; lastLogin?:string };
+type AdminOperation = { id:number; username?:string; action:string; entity_type?:string; entity_id?:string; detail?:string; created_at:string };
+type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; operations:AdminOperation[]; jobs:Job[]; serverTime:string };
 
 const api = async (path: string, token: string, init: RequestInit = {}) => {
   const headers = new Headers(init.headers || {});
@@ -78,6 +82,13 @@ function App() {
   const [quickMedia, setQuickMedia] = useState<FileList | null>(null);
   const [clearSelections, setClearSelections] = useState<string[]>([]);
   const [clearLocalPrinter, setClearLocalPrinter] = useState(true);
+  const [clientId] = useState(() => { const old = localStorage.getItem('esc-client-id'); if (old) return old; const next = crypto.randomUUID(); localStorage.setItem('esc-client-id', next); return next; });
+  const [adminDashboard, setAdminDashboard] = useState<AdminDashboard | null>(null);
+  const [adminWorkTitle, setAdminWorkTitle] = useState('');
+  const [adminWorkDate, setAdminWorkDate] = useState(new Date().toISOString().slice(0,10));
+  const [adminWorkDetail, setAdminWorkDetail] = useState('');
+  const [adminOpTitle, setAdminOpTitle] = useState('');
+  const [adminOpContent, setAdminOpContent] = useState('');
 
   useEffect(() => { if (token) api('/me', token).then((x) => setUser(x.user)).catch(() => { localStorage.removeItem('esc-token'); setToken(''); setUser(null); }); }, [token]);
   useEffect(() => {
@@ -103,13 +114,67 @@ function App() {
     if (tab === 'audit') api('/audit', token).then(setAudits).catch(err => setMessage(err.message));
   }, [tab, token, user]);
 
+  useEffect(() => {
+    if (!token || !user) return;
+    const report = async () => {
+      try {
+        await api('/client/heartbeat', token, { method: 'POST', body: JSON.stringify({
+          clientId, userAgent: navigator.userAgent, bluetoothSupported: 'bluetooth' in navigator,
+          bluetoothConnected: Boolean(printer?.device?.gatt?.connected),
+          printerConnected: Boolean(printer?.characteristic && printer.device.gatt?.connected),
+          printerName: printer?.name || savedPrinter?.device_name || '',
+          printerId: printer?.id || savedPrinter?.device_id || ''
+        }) });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (msg.includes('401') || msg.includes('Session expired') || msg.includes('Authentication required')) {
+          localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null);
+          setMessage('此客戶端工作階段已被管理員結束，請重新登入。');
+        }
+      }
+    };
+    void report();
+    const timer = window.setInterval(report, 3000);
+    return () => window.clearInterval(timer);
+  }, [token, user, clientId, printer, savedPrinter]);
+
+  useEffect(() => {
+    if (!token || !user || user.role !== 'admin' || tab !== 'admin') return;
+    let alive = true;
+    const refresh = async () => {
+      try { const data = await api('/admin/dashboard', token); if (alive) setAdminDashboard(data); }
+      catch (err) { if (alive) setMessage(err instanceof Error ? err.message : '管理後台讀取失敗'); }
+    };
+    void refresh();
+    const timer = window.setInterval(refresh, 3000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [token, user, tab]);
+
+  async function refreshAdmin() { setAdminDashboard(await api('/admin/dashboard', token)); }
+  async function adminAction(path: string, init: RequestInit, success: string) {
+    setBusy(true);
+    try { await api(path, token, init); await refreshAdmin(); setMessage(success); }
+    catch (err) { setMessage(err instanceof Error ? err.message : '管理操作失敗'); }
+    finally { setBusy(false); }
+  }
+  async function createAdminOperation(e: React.FormEvent) {
+    e.preventDefault();
+    await adminAction('/admin/operations', { method:'POST', body:JSON.stringify({ title:adminOpTitle, content:adminOpContent }) }, '操作記錄已新增');
+    setAdminOpTitle(''); setAdminOpContent('');
+  }
+  async function createAdminWork(e: React.FormEvent) {
+    e.preventDefault();
+    await adminAction('/admin/jobs', { method:'POST', body:JSON.stringify({ title:adminWorkTitle, jobDate:adminWorkDate, detail:adminWorkDetail }) }, '工作記錄已新增');
+    setAdminWorkTitle(''); setAdminWorkDetail('');
+  }
+
   async function login() {
     setBusy(true); setMessage('');
     try {
       const options = await fetch('/api/auth/login/options', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) }).then(async r => { const x = await r.json(); if (!r.ok) throw new Error(x.error); return x; });
       const { challengeId, username: loginName, ...publicKey } = options;
       const response = await startAuthentication({ optionsJSON: publicKey });
-      const result = await fetch('/api/auth/login/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: loginName, challengeId, response }) }).then(async r => { const x = await r.json(); if (!r.ok) throw new Error(x.error); return x; });
+      const result = await fetch('/api/auth/login/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: loginName, challengeId, response, clientId }) }).then(async r => { const x = await r.json(); if (!r.ok) throw new Error(x.error); return x; });
       localStorage.setItem('esc-token', result.token); setToken(result.token); setUser(result.user); setMessage('登入成功');
     } catch (e) { setMessage(e instanceof Error ? e.message : '登入失敗'); }
     finally { setBusy(false); }
@@ -271,9 +336,11 @@ function App() {
     } catch (e) { setMessage(e instanceof Error ? e.message : '推播訂閱失敗'); }
   }
 
-  const tabs = useMemo(() => [
-    ['printer', '藍牙打印'], ['events', '事件管理'], ['manual-event', '手動新增事件'], ['jobs', '工作排程'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']
-  ], []);
+  const tabs = useMemo(() => {
+    const base: [string,string][] = [['printer', '藍牙打印'], ['events', '事件管理'], ['manual-event', '手動新增事件'], ['jobs', '工作排程'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']];
+    if (user?.role === 'admin') base.push(['admin', '管理後台']);
+    return base;
+  }, [user?.role]);
   if (!user) return <main className="auth-shell"><section className="panel auth-panel"><div className="brand">ESC <span>PRINTING</span></div><h1>PWA ESC Printing</h1><p className="muted">以 Passkey 安全登入，管理打印機、事件及記錄。</p><label>使用者名稱<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" placeholder="例如：operator01" /></label><label>顯示名稱（首次註冊）<input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="操作人員" /></label><div className="actions"><button disabled={busy || !username} onClick={login}>{busy ? '處理中…' : 'Passkey 登入'}</button><button className="secondary" disabled={busy || !username} onClick={register}>註冊 Passkey</button></div><p className="hint">首次使用請先註冊 Passkey。生產環境請關閉公開註冊並改用邀請或管理員建立帳戶。</p>{message && <p className="notice">{message}</p>}</section></main>;
 
   return <div className="app-shell"><header className="topbar"><div><div className="brand">ESC <span>PRINTING</span></div><small>收據打印 · 事件 · 稽核</small></div><div className="account"><span>{user.displayName || user.username}</span><button className="secondary compact" onClick={logout}>登出</button></div></header>
@@ -286,6 +353,16 @@ function App() {
       {tab === 'clear-records' && <section className="grid two"><article className="panel"><h2>清除持久化記錄</h2><p className="muted">勾選需要刪除的資料類別。這是永久刪除操作，請先確認備份。</p>{[['events','事件及其圖片／影片附件'],['jobs','每日及手動工作記錄'],['logins','登入／登出歷史記錄'],['printer_preferences','伺服器保存的打印機偏好'],['push_subscriptions','推播訂閱資料']] .map(([key,label]) => <label className="check-row" key={key}><input type="checkbox" checked={clearSelections.includes(key)} onChange={e => setClearSelections(old => e.target.checked ? [...old,key] : old.filter(x => x !== key))} />{label}</label>)}<label className="check-row"><input type="checkbox" checked={clearLocalPrinter} onChange={e => setClearLocalPrinter(e.target.checked)} />本機瀏覽器 IndexedDB 打印機偏好</label><div className="warning-note">為保留可追溯性，操作稽核記錄不會被此頁清除；系統會追加一筆「清除記錄」操作。使用者帳戶、Passkey 與目前登入工作階段不會被刪除。</div><button className="danger" disabled={busy || (!clearSelections.length && !clearLocalPrinter)} onClick={clearPersistentRecords}>{busy ? '清除中…' : '永久清除所選記錄'}</button></article><article className="panel"><h2>資料保存位置</h2><p>伺服器資料庫：<code>./data/app.sqlite</code></p><p>事件媒體檔案：<code>./uploads/</code></p><p>本機打印機偏好：瀏覽器 IndexedDB（資料庫 <code>esc-printing-local</code>）。</p><p className="hint">清除事件會同時刪除事件資料、附件資料庫索引及對應媒體檔案。清除伺服器資料只影響此應用程式資料，不會清除瀏覽器的網站權限或作業系統藍牙配對。</p></article></section>}
       {tab === 'jobs' && <section className="grid two"><article className="panel"><h2>建立工作記錄</h2><form onSubmit={saveJob}><label>標題<input required value={jobTitle} onChange={e => setJobTitle(e.target.value)} /></label><label>內容<textarea rows={4} value={jobDetail} onChange={e => setJobDetail(e.target.value)} /></label><button disabled={busy}>新增工作</button></form><p className="hint">系統每日 00:00（Asia/Singapore 預設）建立一筆自動工作記錄。伺服器必須持續運行才能觸發排程；啟動時亦會補上當日缺失記錄。</p></article><article className="panel"><h2>工作歷史 <span className="count">{jobs.length}</span></h2><div className="table-wrap"><table><thead><tr><th>日期</th><th>工作</th><th>狀態</th><th>內容</th></tr></thead><tbody>{jobs.map(j => <tr key={j.id}><td>{j.job_date}</td><td>{j.title}</td><td><span className="status">{j.status}</span></td><td>{j.detail}</td></tr>)}</tbody></table></div></article></section>}
       {tab === 'logins' && <section className="panel"><h2>登入人員及歷史記錄</h2><div className="table-wrap"><table><thead><tr><th>時間</th><th>使用者</th><th>事件</th><th>結果</th><th>說明</th></tr></thead><tbody>{logins.map(l => <tr key={l.id}><td>{l.created_at}</td><td>{l.username}</td><td>{l.event}</td><td>{l.success ? '成功' : '失敗'}</td><td>{l.detail}</td></tr>)}</tbody></table></div></section>}
+
+      {tab === 'admin' && user.role === 'admin' && <section className="admin-layout">
+        <div className="admin-heading"><div><h2>即時客戶端管理</h2><p className="muted">客戶端每 3 秒回報一次；後台每 3 秒刷新。最後更新：{adminDashboard?.serverTime || '讀取中…'}</p></div><button className="secondary" disabled={busy} onClick={() => refreshAdmin().catch(e => setMessage(e.message))}>立即刷新</button></div>
+        <div className="admin-stats"><article className="stat-card"><span>已註冊用戶</span><strong>{adminDashboard?.users.length ?? '—'}</strong></article><article className="stat-card"><span>在線客戶端</span><strong>{adminDashboard?.clients.filter(c => c.online).length ?? '—'}</strong></article><article className="stat-card"><span>已連接打印機</span><strong>{adminDashboard?.clients.filter(c => c.online && c.printerConnected).length ?? '—'}</strong></article><article className="stat-card"><span>工作記錄</span><strong>{adminDashboard?.jobs.length ?? '—'}</strong></article></div>
+        <article className="panel"><h2>客戶端即時狀態</h2><p className="hint">「強制登出」會撤銷該客戶端的伺服器工作階段；客戶端最遲在下一次 3 秒心跳時發現並清除本機登入狀態。</p><div className="table-wrap"><table><thead><tr><th>用戶／狀態</th><th>打印機</th><th>Bluetooth</th><th>最近回報</th><th>瀏覽器</th><th>操作</th></tr></thead><tbody>{(adminDashboard?.clients || []).map(c => <tr key={c.clientId}><td><strong>{c.username}</strong><div className={c.online ? 'live-pill online' : 'live-pill'}>{c.online ? '在線' : '離線'}</div><small>{c.clientId.slice(0,8)}…</small></td><td>{c.printerName || '未選取'}<div className={c.printerConnected ? 'live-pill online' : 'live-pill'}>{c.printerConnected ? '打印機已連接' : '打印機未連接'}</div></td><td>{c.bluetoothSupported ? '瀏覽器支援' : '不支援'}<div>{c.bluetoothConnected ? 'GATT 已連接' : 'GATT 未連接'}</div></td><td>{c.lastSeen}</td><td><small>{c.userAgent || '—'}</small></td><td><button className="danger compact" disabled={busy || !c.online} onClick={() => { if (window.confirm('確定強制登出此客戶端？')) void adminAction('/admin/clients/'+encodeURIComponent(c.clientId)+'/logout',{method:'POST'},'已發出強制登出指令'); }}>強制登出</button></td></tr>)}</tbody></table>{!adminDashboard?.clients.length && <p className="muted">尚未收到客戶端心跳。登入中的客戶端會自動出現在此處。</p>}</div></article>
+        <article className="panel"><h2>已註冊用戶管理</h2><div className="table-wrap"><table><thead><tr><th>用戶</th><th>角色</th><th>Passkey</th><th>活動工作階段</th><th>最後登入</th><th>註冊時間</th><th>管理</th></tr></thead><tbody>{(adminDashboard?.users || []).map(a => <tr key={a.id}><td><strong>{a.displayName || a.username}</strong><div>{a.username}</div></td><td><select value={a.role} disabled={busy || a.id === user.id} onChange={e => void adminAction('/admin/users/'+a.id+'/role',{method:'POST',body:JSON.stringify({role:e.target.value})},'用戶角色已更新')}><option value="user">一般用戶</option><option value="admin">管理員</option></select></td><td>{a.passkeyCount}</td><td>{a.activeSessions}</td><td>{a.lastLogin || '—'}</td><td>{a.createdAt}</td><td><button className="danger compact" disabled={busy || a.id === user.id} onClick={() => { if(window.confirm('確定刪除此用戶？Passkey、登入工作階段、推播訂閱及其客戶端狀態會一併刪除。')) void adminAction('/admin/users/'+a.id,{method:'DELETE'},'用戶已刪除'); }}>刪除用戶</button></td></tr>)}</tbody></table></div></article>
+        <div className="grid two"><article className="panel"><h2>後台新增操作記錄</h2><form onSubmit={createAdminOperation}><label>標題<input required value={adminOpTitle} onChange={e=>setAdminOpTitle(e.target.value)} /></label><label>內容<textarea rows={3} value={adminOpContent} onChange={e=>setAdminOpContent(e.target.value)} /></label><button disabled={busy || !adminOpTitle.trim()}>新增操作記錄</button></form></article><article className="panel"><h2>後台新增工作記錄</h2><form onSubmit={createAdminWork}><label>工作標題<input required value={adminWorkTitle} onChange={e=>setAdminWorkTitle(e.target.value)} /></label><label>日期<input type="date" required value={adminWorkDate} onChange={e=>setAdminWorkDate(e.target.value)} /></label><label>工作內容<textarea rows={3} value={adminWorkDetail} onChange={e=>setAdminWorkDetail(e.target.value)} /></label><button disabled={busy || !adminWorkTitle.trim()}>新增工作記錄</button></form></article></div>
+        <article className="panel"><h2>操作記錄管理</h2><div className="table-wrap"><table><thead><tr><th>時間</th><th>人員</th><th>操作</th><th>類型</th><th>內容</th><th>管理</th></tr></thead><tbody>{(adminDashboard?.operations || []).map(op => <tr key={op.id}><td>{op.created_at}</td><td>{op.username || 'system'}</td><td>{op.action}</td><td>{op.entity_type || '—'}</td><td>{(() => { try { const d=JSON.parse(op.detail || 'null'); return d?.title ? d.title+(d.content ? '：'+d.content : '') : (op.detail || op.entity_id || '—'); } catch { return op.detail || op.entity_id || '—'; } })()}</td><td><button className="danger compact" disabled={busy} onClick={() => { if(window.confirm('確定刪除此操作記錄？系統會保留一筆刪除稽核記錄。')) void adminAction('/admin/operations/'+op.id,{method:'DELETE'},'操作記錄已刪除'); }}>刪除</button></td></tr>)}</tbody></table></div></article>
+        <article className="panel"><h2>工作記錄管理</h2><div className="table-wrap"><table><thead><tr><th>日期</th><th>標題</th><th>狀態</th><th>內容</th><th>建立時間</th><th>管理</th></tr></thead><tbody>{(adminDashboard?.jobs || []).map(j => <tr key={j.id}><td>{j.job_date}</td><td>{j.title}</td><td>{j.status}</td><td>{j.detail}</td><td>{j.created_at}</td><td><button className="danger compact" disabled={busy} onClick={() => { if(window.confirm('確定刪除此工作記錄？')) void adminAction('/admin/jobs/'+encodeURIComponent(j.id),{method:'DELETE'},'工作記錄已刪除'); }}>刪除</button></td></tr>)}</tbody></table></div></article>
+      </section>}
       {tab === 'audit' && <section className="panel"><h2>操作稽核歷史</h2><div className="table-wrap"><table><thead><tr><th>時間</th><th>人員</th><th>操作</th><th>類型</th><th>對象 ID</th><th>內容</th></tr></thead><tbody>{audits.map(a => <tr key={a.id}><td>{a.created_at}</td><td>{a.username || 'system'}</td><td>{a.action}</td><td>{a.entity_type}</td><td>{a.entity_id}</td><td>{a.detail}</td></tr>)}</tbody></table></div></section>}
     </main><footer>本機持久化 · SQLite · WebAuthn · BLE ESC/POS</footer></div>;
 }

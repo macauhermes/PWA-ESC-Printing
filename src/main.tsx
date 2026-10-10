@@ -186,6 +186,22 @@ function App() {
     await adminAction('/admin/operations', { method:'POST', body:JSON.stringify({ title:adminOpTitle, content:adminOpContent }) }, '操作記錄已新增');
     setAdminOpTitle(''); setAdminOpContent('');
   }
+  async function sendAdminNotification(e: React.FormEvent) {
+    e.preventDefault();
+    try {
+      await adminAction('/admin/notifications', { method:'POST', body:JSON.stringify({
+        title: notificationTitle, body: notificationBody, targetClientId: notificationTarget
+      }) }, notificationTarget ? '指定客戶端通知已保存' : '廣播通知已保存');
+      setNotificationTitle(''); setNotificationBody('');
+    } catch {}
+  }
+  async function markNotificationRead(notificationId: string) {
+    try {
+      await api('/notifications/' + encodeURIComponent(notificationId) + '/read', token, { method:'POST' });
+      setNotifications(rows => rows.map(n => n.id === notificationId ? { ...n, isRead: 1, readAt: new Date().toISOString() } : n));
+    } catch (err) { setMessage(err instanceof Error ? err.message : '更新通知狀態失敗'); }
+  }
+
   async function createAdminWork(e: React.FormEvent) {
     e.preventDefault();
     await adminAction('/admin/jobs', { method:'POST', body:JSON.stringify({ title:adminWorkTitle, jobDate:adminWorkDate, detail:adminWorkDetail }) }, '工作記錄已新增');

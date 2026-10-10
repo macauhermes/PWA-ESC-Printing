@@ -12,8 +12,14 @@ import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthe
 import type { AuthenticationResponseJSON, RegistrationResponseJSON, WebAuthnCredential } from '@simplewebauthn/server';
 import { db } from './db.js';
 
-const configuredAdminUsernames = new Set((process.env.ADMIN_USERNAMES || '').split(',').map(v => v.trim().toLowerCase()).filter(Boolean));
-for (const username of configuredAdminUsernames) db.prepare("UPDATE users SET role='admin' WHERE username=?").run(username);
+const adminUsername = String(process.env.ADMIN_USERNAME || '').trim().toLowerCase();
+const adminPassword = String(process.env.ADMIN_PASSWORD || '');
+if (adminUsername) {
+  db.prepare("UPDATE users SET role='user' WHERE role='admin' AND username<>?").run(adminUsername);
+  db.prepare("UPDATE users SET role='admin' WHERE username=?").run(adminUsername);
+} else {
+  db.prepare("UPDATE users SET role='user' WHERE role='admin'").run();
+}
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -39,12 +45,18 @@ const publicUser = (u: any) => ({ id: u.id, username: u.username, displayName: u
 const auth = (req: any, res: any, next: any) => {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'Authentication required' });
-  const session = db.prepare('SELECT s.user_id,s.client_id,s.token_hash,u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?').get(hash(token), Date.now()) as any;
+  const session = db.prepare('SELECT s.user_id,s.client_id,s.token_hash,s.login_type,u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?').get(hash(token), Date.now()) as any;
   if (!session) return res.status(401).json({ error: 'Session expired; please sign in again' });
   req.user = session; next();
 };
 const requireAdmin = (req: any, res: any, next: any) => {
-  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Administrator permission required' });
+  const ua = String(req.headers['user-agent'] || '');
+  if (req.user?.role !== 'admin' || req.user?.login_type !== 'admin_password') {
+    return res.status(403).json({ error: 'Administrator password login required' });
+  }
+  if (/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua)) {
+    return res.status(403).json({ error: 'The administrator console is available on desktop browsers only' });
+  }
   next();
 };
 const challenge = (kind: string, value: string) => {
@@ -61,15 +73,15 @@ const takeChallenge = (cid: string, kind: string) => {
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'PWA ESC Printing API' }));
 app.get('/api/config', (_req, res) => res.json({ rpName, rpID, origin, vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '' }));
 
-// Passkey enrollment. In production, disable open enrollment or add an invitation/admin workflow.
+// Public passkey enrollment for ordinary users. The env-configured administrator is password-only.
 app.post('/api/auth/register/options', async (req, res) => {
-  if (process.env.ALLOW_SELF_REGISTRATION === 'false') return res.status(403).json({ error: 'Self registration is disabled' });
   const username = String(req.body.username || '').trim().toLowerCase();
+  if (adminUsername && username === adminUsername) return res.status(403).json({ error: 'This username is reserved for administrator password login' });
   const displayName = String(req.body.displayName || username).trim();
   if (!/^[a-z0-9._-]{3,40}$/.test(username)) return res.status(400).json({ error: 'Username must be 3-40 characters: a-z, 0-9, dot, underscore or hyphen' });
   let user = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
-  if (!user) { user = { id: id(), username, display_name: displayName, role: configuredAdminUsernames.has(username) ? 'admin' : 'user' }; db.prepare('INSERT INTO users(id,username,display_name,role) VALUES(?,?,?,?)').run(user.id, username, displayName, user.role); }
-  if (configuredAdminUsernames.has(username) && user.role !== 'admin') { db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user.id); user.role = 'admin'; }
+  if (!user) { user = { id: id(), username, display_name: displayName, role: 'user' }; db.prepare('INSERT INTO users(id,username,display_name,role) VALUES(?,?,?,?)').run(user.id, username, displayName, user.role); }
+  if (user.role === 'admin') return res.status(403).json({ error: 'Administrator accounts cannot register a passkey' });
   const existing = db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[];
   if (existing.length > 0) return res.status(409).json({ error: 'This username already has a passkey. Ask an administrator to add another authenticator.' });
   const options = await awaitRegistrationOptions(user, existing);
@@ -103,6 +115,7 @@ app.post('/api/auth/register/verify', async (req, res) => {
 });
 app.post('/api/auth/login/options', async (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
+  if (adminUsername && username === adminUsername) return res.status(403).json({ error: 'Use administrator password login on a desktop browser' });
   const user = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
   if (!user) { db.prepare('INSERT INTO login_events(username,event,success,detail) VALUES(?,?,0,?)').run(username || '(empty)', 'login', 'Unknown username'); return res.status(404).json({ error: 'User not found; register a passkey first' }); }
   const creds = db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[];
@@ -140,6 +153,38 @@ app.post('/api/auth/logout', auth, (req: any, res) => {
   if (req.user.client_id) db.prepare("UPDATE client_status SET online=0, last_seen=CURRENT_TIMESTAMP WHERE client_id=?").run(req.user.client_id);
   db.prepare('INSERT INTO login_events(user_id,username,event,success,detail) VALUES(?,?,?,1,?)').run(req.user.id, req.user.username, 'logout', 'User signed out');
   audit(req.user, 'auth.logout', 'user', req.user.id); res.json({ ok: true });
+});
+app.post('/api/admin/login', async (req: any, res) => {
+  if (!adminUsername || !adminPassword) return res.status(503).json({ error: 'Set ADMIN_USERNAME and ADMIN_PASSWORD in the server .env file' });
+  const ua = String(req.headers['user-agent'] || '');
+  if (/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(ua)) {
+    return res.status(403).json({ error: 'Administrator login is available on desktop browsers only' });
+  }
+  const suppliedUsername = String(req.body.username || '').trim().toLowerCase();
+  const suppliedPassword = String(req.body.password || '');
+  const passwordMatches = crypto.timingSafeEqual(
+    crypto.createHash('sha256').update(suppliedPassword).digest(),
+    crypto.createHash('sha256').update(adminPassword).digest()
+  );
+  if (suppliedUsername !== adminUsername || !passwordMatches) {
+    db.prepare('INSERT INTO login_events(username,event,success,detail) VALUES(?,?,0,?)').run(suppliedUsername || '(empty)', 'admin_login', 'Invalid administrator credentials');
+    return res.status(401).json({ error: 'Invalid administrator username or password' });
+  }
+  let user = db.prepare('SELECT * FROM users WHERE username=?').get(adminUsername) as any;
+  if (!user) {
+    user = { id: id(), username: adminUsername, display_name: 'Administrator', role: 'admin' };
+    db.prepare('INSERT INTO users(id,username,display_name,role) VALUES(?,?,?,?)').run(user.id, user.username, user.display_name, user.role);
+  } else {
+    db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user.id);
+    user.role = 'admin';
+  }
+  const token = crypto.randomBytes(32).toString('base64url');
+  const clientId = String(req.body.clientId || '').slice(0, 128) || crypto.randomUUID();
+  db.prepare('INSERT INTO sessions(token_hash,user_id,client_id,login_type,expires_at) VALUES(?,?,?,?,?)')
+    .run(hash(token), user.id, clientId, 'admin_password', Date.now() + 7 * 24 * 60 * 60_000);
+  db.prepare('INSERT INTO login_events(user_id,username,event,success,detail) VALUES(?,?,?,1,?)').run(user.id, user.username, 'admin_login', 'Administrator password verified');
+  audit(publicUser(user), 'auth.admin_login_success', 'user', user.id);
+  res.json({ token, user: publicUser(user) });
 });
 app.get('/api/me', auth, (req: any, res) => res.json({ user: publicUser(req.user) }));
 
@@ -189,11 +234,11 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
 });
 app.post('/api/admin/users/:id/role', auth, requireAdmin, (req: any, res) => {
   const role = String(req.body.role || '');
-  if (!['user','admin'].includes(role)) return res.status(400).json({ error: 'Role must be user or admin' });
+  if (role !== 'user') return res.status(400).json({ error: 'The administrator account is configured only through ADMIN_USERNAME and cannot be assigned to other users' });
   const target = db.prepare('SELECT id,username,role FROM users WHERE id=?').get(req.params.id) as any;
   if (!target) return res.status(404).json({ error: 'User not found' });
   if (target.id === req.user.id && role !== 'admin') return res.status(400).json({ error: 'You cannot remove your own administrator role' });
-  if (configuredAdminUsernames.has(target.username) && role !== 'admin') return res.status(400).json({ error: 'This account is configured as an administrator in ADMIN_USERNAMES' });
+  if (adminUsername && target.username === adminUsername && role !== 'admin') return res.status(400).json({ error: 'The configured administrator account cannot be demoted here' });
   if (target.role === 'admin' && role !== 'admin' && (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin'").get() as any).n <= 1)
     return res.status(400).json({ error: 'At least one administrator must remain' });
   db.prepare('UPDATE users SET role=? WHERE id=?').run(role, target.id);
@@ -204,7 +249,7 @@ app.delete('/api/admin/users/:id', auth, requireAdmin, (req: any, res) => {
   const target = db.prepare('SELECT id,username,role FROM users WHERE id=?').get(req.params.id) as any;
   if (!target) return res.status(404).json({ error: 'User not found' });
   if (target.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
-  if (configuredAdminUsernames.has(target.username)) return res.status(400).json({ error: 'This account is configured in ADMIN_USERNAMES and cannot be deleted here' });
+  if (adminUsername && target.username === adminUsername) return res.status(400).json({ error: 'The configured administrator account cannot be deleted here' });
   if (target.role === 'admin' && (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin'").get() as any).n <= 1)
     return res.status(400).json({ error: 'At least one administrator must remain' });
   audit(req.user, 'admin.user_deleted', 'user', target.id, { username: target.username });

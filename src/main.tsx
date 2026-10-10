@@ -83,12 +83,13 @@ function App() {
   const [adminUsernameInput, setAdminUsernameInput] = useState('');
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
   const [isDesktop, setIsDesktop] = useState(() => typeof window !== 'undefined' && window.matchMedia('(min-width: 801px)').matches);
-  const [tab, setTab] = useState('printer');
+  const [tab, setTab] = useState('print');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [printer, setPrinter] = useState<Printer | null>(null);
   const [savedPrinter, setSavedPrinter] = useState<any>(null);
   const [codePageIndex, setCodePageIndex] = useState('0');
+  const [printNote, setPrintNote] = useState('');
   const [events, setEvents] = useState<EventItem[]>([]);
   const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
   const [workMedia, setWorkMedia] = useState<File[]>([]);
@@ -133,6 +134,7 @@ function App() {
   }, []);
   useEffect(() => {
     if (!token || !user) return;
+    if (user.role === 'admin') { setPrinter(null); setSavedPrinter(null); return; }
     api('/printer-preference', token).then(setSavedPrinter).catch(() => {});
     loadPrinterLocally().then(async saved => {
       if (!saved) return;
@@ -173,7 +175,7 @@ function App() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : '';
         if (msg.includes('401') || msg.includes('Session expired') || msg.includes('Authentication required')) {
-          localStorage.removeItem('esc-token'); setToken(''); setUser(null); setTab('printer');
+          localStorage.removeItem('esc-token'); setToken(''); setUser(null); setTab('print');
         }
       }
     };
@@ -196,7 +198,7 @@ function App() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : '';
         if (msg.includes('401') || msg.includes('Session expired') || msg.includes('Authentication required')) {
-          localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null); setTab('printer');
+          localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null); setTab('print');
           setMessage('此客戶端工作階段已被管理員結束，請重新登入。');
         }
       }
@@ -329,40 +331,24 @@ function App() {
     if (!printer?.characteristic) { setMessage('請先選取並連接打印機。'); return; }
     setBusy(true);
     try {
+      const width = (value: string) => Array.from(value).reduce((sum, char) => sum + ((char.codePointAt(0) || 0) > 0xff ? 2 : 1), 0);
+      const columns = (left: string, right: string, maxWidth = 42) => { let fitted = ''; for (const char of Array.from(left)) { if (width(fitted + char) > maxWidth - width(right) - 1) break; fitted += char; } return fitted + ' '.repeat(Math.max(1, maxWidth - width(fitted) - width(right))) + right; };
+      const now = new Date(); const orderNo = 'TEST-' + now.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
+      const noteLines = (printNote.trim() || '（未填寫）').split(/\r?\n/).map(line => '備註：' + line);
       const text = [
-        '                 測試付款收據',
-        '================================================',
-        '店名：示範商店',
-        '單號：' + new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 14),
-        '日期：' + new Date().toLocaleString('zh-TW'),
-        '------------------------------------------------',
-        '商品                         數量          金額',
-        '測試商品                        1         $80.00',
-        '------------------------------------------------',
-        '小計                                      $80.00',
-        '總計                                      $80.00',
-        '付款方式：現金',
-        '狀態：測試打印（非真實交易）',
-        '',
-        '      感謝惠顧，歡迎再次光臨',
-        '',
-        '',
-        ''
+        '                 示範商店', '                 付款收據', '==================================================', '地址：澳門示範路 88 號', '電話：+853 2888 1234',
+        '單號：' + orderNo, '日期：' + now.toLocaleString('zh-TW'), '收銀員：測試帳戶', '--------------------------------------------------', columns('商品／項目', '數量／金額'),
+        columns('咖啡飲品（測試） x 1', '$28.00'), columns('午餐套餐（測試） x 2', '$96.00'), columns('會員折扣', '-$6.00'), '--------------------------------------------------',
+        columns('小計', '$118.00'), columns('稅項（示範）', '$0.00'), columns('應付總額', '$118.00'), columns('現金付款', '$120.00'), columns('找零', '$2.00'),
+        '付款方式：現金（模擬）', '交易參考：DEMO-NOT-A-REAL-PAYMENT', '狀態：打印測試，非真實交易', '--------------------------------------------------', ...noteLines, '', '             感謝惠顧，歡迎再次光臨', '', '', ''
       ].join('\n');
       const encoded = await api('/receipt/encode', token, { method: 'POST', body: JSON.stringify({ text, codePage: 'big5', codePageIndex: Number(codePageIndex) }) });
       const payload = Uint8Array.from(atob(encoded.base64), c => c.charCodeAt(0));
-      // ESC @ initialize, ESC t n selects a printer-specific code page. Big5 page index varies by printer.
       const bytes = new Uint8Array([0x1b, 0x40, 0x1b, 0x74, Number(encoded.codePageIndex ?? 0x00), ...payload, 0x1d, 0x56, 0x41, 0x10]);
-      const chunkSize = 180;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        const chunk = bytes.slice(i, i + chunkSize);
-        if (printer.characteristic.properties.writeWithoutResponse && printer.characteristic.writeValueWithoutResponse) await printer.characteristic.writeValueWithoutResponse(chunk);
-        else await printer.characteristic.writeValue(chunk);
-      }
-      await api('/receipt/print-log', token, { method: 'POST', body: JSON.stringify({ printerName: printer.name, status: 'submitted' }) });
-      setMessage('已送出測試收據資料。若中文亂碼，請依打印機手冊調整 Big5 code page index。');
-    } catch (e) { setMessage(e instanceof Error ? e.message : '打印失敗'); }
-    finally { setBusy(false); }
+      const chunkSize = 180; for (let i = 0; i < bytes.length; i += chunkSize) { const chunk = bytes.slice(i, i + chunkSize); if (printer.characteristic.properties.writeWithoutResponse && printer.characteristic.writeValueWithoutResponse) await printer.characteristic.writeValueWithoutResponse(chunk); else await printer.characteristic.writeValue(chunk); }
+      await api('/receipt/print-log', token, { method: 'POST', body: JSON.stringify({ printerName: printer.name, status: 'submitted', note: printNote.trim() }) });
+      setMessage('已送出模擬付款測試收據；此內容不代表真實交易。若中文亂碼，請依打印機手冊調整 Big5 code page index。');
+    } catch (e) { setMessage(e instanceof Error ? e.message : '打印失敗'); } finally { setBusy(false); }
   }
 
   async function uploadCurrentWork() {
@@ -462,24 +448,32 @@ function App() {
   }
   async function subscribePush() {
     try {
-      if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('此瀏覽器不支援 Push API');
-      const cfg = await fetch('/api/config').then(r => r.json());
-      if (!cfg.vapidPublicKey) throw new Error('伺服器尚未設定 VAPID keys');
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') throw new Error('通知權限未授予');
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('此瀏覽器不支援 Web Push。請更新 Safari／Chrome，並確認網站使用 HTTPS。');
+      if (!('Notification' in window)) throw new Error('此瀏覽器不支援通知權限。');
+      const ua = navigator.userAgent;
+      const isIOS = /iPhone|iPad|iPod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true;
+      if (isIOS && !isStandalone) throw new Error('iPhone／iPad 必須先在 Safari 按「分享」→「加入主畫面」，再從主畫面開啟此 Web App，才能啟用推播。');
+      // Request permission directly from the button gesture before any network awaits (required on iOS).
+      const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+      if (permission !== 'granted') throw new Error('通知權限未授予；請在瀏覽器或系統設定中允許通知。');
+      const configResponse = await fetch('/api/config');
+      if (!configResponse.ok) throw new Error(`讀取推播設定失敗（HTTP ${configResponse.status}）`);
+      const cfg = await configResponse.json();
+      if (!cfg.vapidPublicKey) throw new Error('伺服器尚未設定 VAPID_PUBLIC_KEY。');
       const reg = await navigator.serviceWorker.ready;
       let subscription = await reg.pushManager.getSubscription();
       if (!subscription) subscription = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64(cfg.vapidPublicKey) });
       await api('/push/subscribe', token, { method: 'POST', body: JSON.stringify(subscription) });
-      await api('/push/test', token, { method: 'POST' });
-      setMessage('已訂閱推播，並已要求發送測試通知。');
+      const result = await api('/push/test', token, { method: 'POST' });
+      setMessage(`已完成 Web App 推播訂閱；測試通知送出 ${result.sent}/${result.total} 個訂閱端點。`);
     } catch (e) { setMessage(e instanceof Error ? e.message : '推播訂閱失敗'); }
   }
 
   const tabs = useMemo(() => {
-    const base: [string,string][] = [['printer', '藍牙打印'], ['printer-test', '測試打印'], ['notifications', user?.role === 'admin' ? '通知' : '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')]];
-    if (user?.role === 'admin') base.push(['users', '用戶管理'], ['device-work', '設備工作記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']);
-    else base.push(['events', '事件管理']);
+    const base: [string,string][] = user?.role === 'admin'
+      ? [['notifications', '通知'], ['users', '用戶管理'], ['device-work', '設備工作記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]
+      : [['print', '打印'], ['notifications', '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')], ['events', '事件管理']];
     return base;
   }, [user?.role, notifications]);
   if (!user) return <main className="auth-shell"><section className="panel auth-panel"><div className="brand">ESC <span>PRINTING</span></div><h1>PWA ESC Printing</h1>
@@ -491,10 +485,26 @@ function App() {
     <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'tab active' : 'tab'} onClick={() => { setTab(key); setMessage(''); }}>{label}</button>)}</nav>
     <main className="content">
       {message && <div className="notice" role="status">{message}<button className="notice-close" onClick={() => setMessage('')}>×</button></div>}
-      {tab === 'printer' && <section className="grid two"><article className="panel"><h2>藍牙熱敏打印機</h2><p className="muted">使用支援 Web Bluetooth 的 Chromium 瀏覽器；需要 HTTPS 或 localhost。</p><div className="printer-card"><div className="printer-icon">▤</div><div><strong>{printer?.name || savedPrinter?.device_name || '尚未選取打印機'}</strong><p className="muted">{printer?.characteristic ? '已連接 · 可寫入' : printer ? '已選取 · 尚未連接' : savedPrinter?.device_name ? '已保存偏好；請重新選取裝置以取得瀏覽器授權' : '尚未連接'}</p></div></div><div className="actions"><button disabled={busy} onClick={scanPrinter}>掃描 / 選取</button><button disabled={busy || !printer} className="secondary" onClick={connectPrinter}>連接</button><button disabled={busy || !printer?.characteristic} onClick={()=>setTab('printer-test')}>測試打印</button></div><p className="hint">瀏覽器安全限制：裝置 ID/名稱可保存，但網頁不能在下次造訪時靜默重新取得裝置權限；通常需再次由使用者選取。部分打印機使用廠商專用 BLE 協定。</p></article><article className="panel"><h2>推播通知</h2><p className="muted">在此設備訂閱系統推播；管理員可以指定此設備或廣播所有已訂閱設備。請授予瀏覽器通知權限。</p><button disabled={busy} onClick={subscribePush}>啟用推播並測試</button></article></section>}
-      {tab === 'printer-test' && <section className="grid two"><article className="panel"><h2>測試打印</h2><p className="muted">此頁只列印固定測試收據，不會列印事件內容或產生真實交易單據。</p><div className="printer-card"><div className="printer-icon">▤</div><div><strong>{printer?.name || savedPrinter?.device_name || '尚未選取打印機'}</strong><p className="muted">{printer?.characteristic ? '已連接 · 可以立即測試' : '未連接 · 請先掃描並連接打印機'}</p></div></div><div className="receipt-preview"><div className="receipt-title">測試付款收據</div><hr/><p>店名：示範商店</p><p>測試商品　× 1　$80.00</p><hr/><strong>總計　　$80.00</strong><p>付款方式：現金</p><p className="receipt-footer">非真實交易 · 感謝惠顧</p></div><label>ESC/POS 字碼表索引（依打印機手冊）<input type="number" min="0" max="255" value={codePageIndex} onChange={e => setCodePageIndex(e.target.value)} /></label><p className="hint">文字以 Big5 編碼；不同打印機的 Big5 code page 編號可能不同。</p><div className="actions"><button disabled={busy || !printer?.characteristic} onClick={printTest}>{busy ? '打印中…' : '立即打印測試收據'}</button><button className="secondary" disabled={busy || !printer} onClick={connectPrinter}>重新連接</button><button className="secondary" disabled={busy} onClick={scanPrinter}>選取其他打印機</button></div></article></section>}{tab === 'notifications' && user.role === 'admin' && <section className="panel"><h2>發送通知</h2><p className="muted">通知集中於此頁管理。通知會保存到客戶端站內通知中心；如已設定 VAPID，亦會向指定已訂閱設備或所有已訂閱設備發送 Web Push。管理員不顯示自己的通知收件匣。</p><form onSubmit={sendAdminNotification}><label>接收對象<select value={notificationTarget} onChange={e=>setNotificationTarget(e.target.value)}><option value="">廣播所有已訂閱設備</option>{(adminDashboard?.clients || []).filter(c => Number(c.pushSubscribed || 0) > 0).map(c=><option key={c.clientId} value={c.clientId}>{c.username} · {c.clientId.slice(0,8)}… {c.online ? '（在線）' : '（離線）'} · 已訂閱推播</option>)}</select></label><label>通知標題<input required maxLength={200} value={notificationTitle} onChange={e=>setNotificationTitle(e.target.value)} placeholder="例如：系統維護通知" /></label><label>通知內容<textarea required maxLength={5000} rows={4} value={notificationBody} onChange={e=>setNotificationBody(e.target.value)} placeholder="輸入要通知客戶端的訊息" /></label><button disabled={busy || !notificationTitle.trim() || !notificationBody.trim()}>{notificationTarget ? '推播指定設備' : '廣播所有已訂閱設備'}</button></form></section>}
-      {tab === 'notifications' && user.role !== 'admin' && <section className="panel"><div className="admin-heading"><div><h2>通知</h2><p className="muted">通知保存在伺服器 SQLite，每 3 秒自動更新；重新整理或重新登入後仍可查看。</p></div><span className="count">{notifications.filter(n => !n.isRead).length} 則未讀</span></div>{notifications.length === 0 ? <p className="muted">目前沒有通知。</p> : notifications.map(n => <article className="list-item" key={n.id}><div className="list-heading"><strong>{n.title}</strong><small>{n.createdAt}</small></div><p>{n.body}</p><div className="actions"><span className="muted">{n.targetClientId ? '指定給此客戶端' : '全體廣播'}</span>{n.isRead ? <span className="status">已讀</span> : <button className="secondary compact" onClick={() => void markNotificationRead(n.id)}>標記已讀</button>}</div></article>)}</section>}
-      {tab === 'events' && user.role !== 'admin' && <section className="grid two">
+            {tab === 'print' && user.role !== 'admin' && <section className="grid two">
+        <article className="panel"><h2>打印</h2><p className="muted">可重複按「選取打印機」重新開啟裝置選擇器，切換到其他支援 BLE GATT 的打印機。需要 HTTPS；iPhone／iPad 的 Safari 不支援 Web Bluetooth。</p>
+          <div className="printer-card"><div className="printer-icon">▤</div><div><strong>{printer?.name || savedPrinter?.device_name || '尚未選取打印機'}</strong><p className="muted">{printer?.characteristic ? '已連接 · 可打印' : printer ? '已選取 · 尚未連接' : '請選取打印機'}</p></div></div>
+          <div className="actions"><button disabled={busy} onClick={() => void scanPrinter()}>選取打印機</button><button className="secondary" disabled={busy || !printer} onClick={() => void connectPrinter()}>{printer?.characteristic ? '重新連接' : '連接打印機'}</button></div>
+          <label>測試收據備註（會打印在收據上，最多 500 字）<textarea rows={3} maxLength={500} value={printNote} onChange={e => setPrintNote(e.target.value)} placeholder="例如：櫃檯 A／紙卷更換後測試／設備編號 PR-01" /></label>
+          <label>ESC/POS 字碼表索引（依打印機手冊）<input type="number" min="0" max="255" value={codePageIndex} onChange={e => setCodePageIndex(e.target.value)} /></label>
+          <p className="hint">測試收據使用模擬商品與付款金額，不代表真實交易。文字以 Big5 編碼；不同打印機的 Big5 code page 編號可能不同。</p>
+          <div className="actions"><button disabled={busy || !printer?.characteristic} onClick={() => void printTest()}>{busy ? '打印中…' : '打印測試'}</button></div></article>
+        <article className="panel"><h2>測試付款收據預覽</h2><div className="receipt-preview">
+          <div className="receipt-title">示範商店 · 付款收據</div><p>地址：澳門示範路 88 號</p><p>電話：+853 2888 1234</p><hr/>
+          <p>單號：TEST-20261011-001</p><p>日期：{new Date().toLocaleString('zh-TW')}</p><p>收銀員：測試帳戶</p><hr/>
+          <div className="receipt-columns"><span>商品／項目</span><span>數量／金額</span></div><div className="receipt-columns"><span>咖啡飲品（測試）× 1</span><span>$28.00</span></div>
+          <div className="receipt-columns"><span>午餐套餐（測試）× 2</span><span>$96.00</span></div><div className="receipt-columns"><span>會員折扣</span><span>-$6.00</span></div><hr/>
+          <div className="receipt-columns"><span>小計</span><span>$118.00</span></div><div className="receipt-columns"><span>稅項（示範）</span><span>$0.00</span></div>
+          <div className="receipt-columns total"><span>應付總額</span><span>$118.00</span></div><div className="receipt-columns"><span>現金付款</span><span>$120.00</span></div><div className="receipt-columns"><span>找零</span><span>$2.00</span></div>
+          <p>付款方式：現金（模擬）</p><p>交易參考：DEMO-NOT-A-REAL-PAYMENT</p><p>狀態：打印測試，非真實交易</p><hr/>
+          <p>備註：{printNote.trim() || '（未填寫）'}</p><p className="receipt-footer">感謝惠顧，歡迎再次光臨</p></div></article>
+      </section>}
+      {tab === 'notifications' && user.role === 'admin' && <section className="panel"><h2>發送通知</h2><p className="muted">通知集中於此頁管理。通知會保存到客戶端站內通知中心；如已設定 VAPID，亦會向指定已訂閱設備或所有已訂閱設備發送 Web Push。管理員不顯示自己的通知收件匣。</p><form onSubmit={sendAdminNotification}><label>接收對象<select value={notificationTarget} onChange={e=>setNotificationTarget(e.target.value)}><option value="">廣播所有已訂閱設備</option>{(adminDashboard?.clients || []).filter(c => Number(c.pushSubscribed || 0) > 0).map(c=><option key={c.clientId} value={c.clientId}>{c.username} · {c.clientId.slice(0,8)}… {c.online ? '（在線）' : '（離線）'} · 已訂閱推播</option>)}</select></label><label>通知標題<input required maxLength={200} value={notificationTitle} onChange={e=>setNotificationTitle(e.target.value)} placeholder="例如：系統維護通知" /></label><label>通知內容<textarea required maxLength={5000} rows={4} value={notificationBody} onChange={e=>setNotificationBody(e.target.value)} placeholder="輸入要通知客戶端的訊息" /></label><button disabled={busy || !notificationTitle.trim() || !notificationBody.trim()}>{notificationTarget ? '推播指定設備' : '廣播所有已訂閱設備'}</button></form></section>}
+            {tab === 'notifications' && user.role !== 'admin' && <section className="panel"><div className="admin-heading"><div><h2>通知</h2><p className="muted">通知保存在伺服器 SQLite，每 3 秒自動更新；重新登入後仍可查看。啟用 Web App 推播後，即使 App 在背景也可接收系統通知（視瀏覽器及作業系統支援而定）。</p></div><span className="count">{notifications.filter(n => !n.isRead).length} 則未讀</span></div><div className="actions"><button disabled={busy} onClick={() => void subscribePush()}>啟用／修復推播訂閱</button></div><p className="hint">iPhone／iPad：請先將網站加入主畫面並從主畫面開啟；Android：請使用最新版 Chrome 或支援 Web Push 的瀏覽器。兩者均須使用 HTTPS 並允許通知。</p>{notifications.length === 0 ? <p className="muted">目前沒有通知。</p> : notifications.map(n => <article className="list-item" key={n.id}><div className="list-heading"><strong>{n.title}</strong><small>{n.createdAt}</small></div><p>{n.body}</p><div className="actions"><span className="muted">{n.targetClientId ? '指定給此客戶端' : '全體廣播'}</span>{n.isRead ? <span className="status">已讀</span> : <button className="secondary compact" onClick={() => void markNotificationRead(n.id)}>標記已讀</button>}</div></article>)}</section>}{tab === 'events' && user.role !== 'admin' && <section className="grid two">
         <article className="panel"><h2>建立新事件／工作</h2><p className="muted">新事件預設只儲存在這部手機的瀏覽器，不會自動上傳。需要時可手動上傳系統，或使用目前已連接的熱敏打印機列印固定測試收據。</p>
           <form onSubmit={saveLocalWork}><label>事件標題<input required maxLength={200} value={workTitle} onChange={e=>setWorkTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容／工作備註<textarea rows={5} maxLength={10000} value={workContent} onChange={e=>setWorkContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label>事件日期與時間<input type="datetime-local" value={workDate} onChange={e=>setWorkDate(e.target.value)} /></label><label>圖片／影片附件（可多選）<input type="file" accept="image/*,video/*" multiple onChange={e=>setWorkMedia(Array.from(e.target.files || []))} /></label><p className="muted">已選取 {workMedia.length} 個附件；每個事件最多 20 個圖片／影片，單一檔案上限 100 MB。</p>{workMedia.map((file,i)=><p className="muted" key={file.name+i}>{file.type.startsWith('video/')?'影片':'圖片'}：{file.name}（{(file.size/1024/1024).toFixed(1)} MB）</p>)}<div className="actions"><button type="submit" disabled={busy || !workTitle.trim()}>暫存於手機</button><button type="button" disabled={busy || !workTitle.trim()} onClick={()=>void uploadCurrentWork()}>上傳事件及附件</button></div></form>
           <p className="hint">手機暫存只保存在目前瀏覽器／裝置；清除網站資料或更換裝置可能導致暫存遺失。暫存內容不會出現在後台，直到按下「上傳系統」。</p>

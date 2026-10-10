@@ -87,7 +87,7 @@ function App() {
   async function scanPrinter() {
     if (!('bluetooth' in navigator)) { setMessage('此瀏覽器不支援 Web Bluetooth。請使用支援 BLE 的 Chromium 瀏覽器及 HTTPS/localhost。'); return; }
     try {
-      const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: [] });
+      const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', '0000ff00-0000-1000-8000-00805f9b34fb', '0000ae00-0000-1000-8000-00805f9b34fb'] });
       const selected: Printer = { id: device.id, name: device.name || 'BLE Thermal Printer', device };
       setPrinter(selected);
       await api('/printer-preference', token, { method: 'POST', body: JSON.stringify({ deviceId: device.id, deviceName: selected.name }) });
@@ -149,7 +149,7 @@ function App() {
         if (printer.characteristic.properties.writeWithoutResponse && printer.characteristic.writeValueWithoutResponse) await printer.characteristic.writeValueWithoutResponse(chunk);
         else await printer.characteristic.writeValue(chunk);
       }
-      await api('/audit', token).catch(() => {}); // audit page access is recorded server-side; receipt result is shown locally
+      await api('/receipt/print-log', token, { method: 'POST', body: JSON.stringify({ printerName: printer.name, status: 'submitted' }) });
       setMessage('已送出測試收據資料。若中文亂碼，請依打印機手冊調整 Big5 code page index。');
     } catch (e) { setMessage(e instanceof Error ? e.message : '打印失敗'); }
     finally { setBusy(false); }

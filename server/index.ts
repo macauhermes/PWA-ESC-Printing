@@ -12,6 +12,9 @@ import { generateAuthenticationOptions, generateRegistrationOptions, verifyAuthe
 import type { AuthenticationResponseJSON, RegistrationResponseJSON, WebAuthnCredential } from '@simplewebauthn/server';
 import { db } from './db.js';
 
+const configuredAdminUsernames = new Set((process.env.ADMIN_USERNAMES || '').split(',').map(v => v.trim().toLowerCase()).filter(Boolean));
+for (const username of configuredAdminUsernames) db.prepare("UPDATE users SET role='admin' WHERE username=?").run(username);
+
 const app = express();
 const port = Number(process.env.PORT || 8787);
 const origin = process.env.APP_ORIGIN || 'http://localhost:5173';
@@ -36,9 +39,13 @@ const publicUser = (u: any) => ({ id: u.id, username: u.username, displayName: u
 const auth = (req: any, res: any, next: any) => {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'Authentication required' });
-  const session = db.prepare('SELECT s.user_id,u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?').get(hash(token), Date.now()) as any;
+  const session = db.prepare('SELECT s.user_id,s.client_id,s.token_hash,u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?').get(hash(token), Date.now()) as any;
   if (!session) return res.status(401).json({ error: 'Session expired; please sign in again' });
   req.user = session; next();
+};
+const requireAdmin = (req: any, res: any, next: any) => {
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: 'Administrator permission required' });
+  next();
 };
 const challenge = (kind: string, value: string) => {
   const cid = id();
@@ -61,7 +68,8 @@ app.post('/api/auth/register/options', async (req, res) => {
   const displayName = String(req.body.displayName || username).trim();
   if (!/^[a-z0-9._-]{3,40}$/.test(username)) return res.status(400).json({ error: 'Username must be 3-40 characters: a-z, 0-9, dot, underscore or hyphen' });
   let user = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
-  if (!user) { user = { id: id(), username, display_name: displayName, role: 'user' }; db.prepare('INSERT INTO users(id,username,display_name) VALUES(?,?,?)').run(user.id, username, displayName); }
+  if (!user) { user = { id: id(), username, display_name: displayName, role: configuredAdminUsernames.has(username) ? 'admin' : 'user' }; db.prepare('INSERT INTO users(id,username,display_name,role) VALUES(?,?,?,?)').run(user.id, username, displayName, user.role); }
+  if (configuredAdminUsernames.has(username) && user.role !== 'admin') { db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user.id); user.role = 'admin'; }
   const existing = db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[];
   if (existing.length > 0) return res.status(409).json({ error: 'This username already has a passkey. Ask an administrator to add another authenticator.' });
   const options = await awaitRegistrationOptions(user, existing);
@@ -116,7 +124,8 @@ app.post('/api/auth/login/verify', async (req, res) => {
     if (!verification.verified) throw new Error('Passkey verification failed');
     db.prepare('UPDATE passkeys SET counter=? WHERE credential_id=?').run(verification.authenticationInfo.newCounter, stored.credential_id);
     const token = crypto.randomBytes(32).toString('base64url');
-    db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(hash(token), user.id, Date.now() + 7 * 24 * 60 * 60_000);
+    const clientId = String(req.body.clientId || '').slice(0, 128) || crypto.randomUUID();
+    db.prepare('INSERT INTO sessions(token_hash,user_id,client_id,expires_at) VALUES(?,?,?,?)').run(hash(token), user.id, clientId, Date.now() + 7 * 24 * 60 * 60_000);
     db.prepare('INSERT INTO login_events(user_id,username,event,success,detail) VALUES(?,?,?,1,?)').run(user.id, user.username, 'login', 'WebAuthn passkey verified');
     audit(publicUser(user), 'auth.login_success', 'user', user.id);
     res.json({ token, user: publicUser(user) });
@@ -128,10 +137,29 @@ app.post('/api/auth/login/verify', async (req, res) => {
 app.post('/api/auth/logout', auth, (req: any, res) => {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(token));
+  if (req.user.client_id) db.prepare("UPDATE client_status SET online=0, last_seen=CURRENT_TIMESTAMP WHERE client_id=?").run(req.user.client_id);
   db.prepare('INSERT INTO login_events(user_id,username,event,success,detail) VALUES(?,?,?,1,?)').run(req.user.id, req.user.username, 'logout', 'User signed out');
   audit(req.user, 'auth.logout', 'user', req.user.id); res.json({ ok: true });
 });
 app.get('/api/me', auth, (req: any, res) => res.json({ user: publicUser(req.user) }));
+
+app.post('/api/client/heartbeat', auth, (req: any, res) => {
+  const clientId = String(req.body.clientId || req.user.client_id || '').slice(0, 128);
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' });
+  if (req.user.client_id && req.user.client_id !== clientId) return res.status(403).json({ error: 'Client session mismatch' });
+  if (!req.user.client_id) db.prepare('UPDATE sessions SET client_id=? WHERE token_hash=?').run(clientId, req.user.token_hash);
+  const body = req.body || {};
+  db.prepare(`INSERT INTO client_status(client_id,user_id,username,online,bluetooth_supported,bluetooth_connected,printer_connected,printer_name,printer_id,user_agent,last_seen)
+    VALUES(?,?,?,1,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+    ON CONFLICT(client_id) DO UPDATE SET user_id=excluded.user_id,username=excluded.username,online=1,
+    bluetooth_supported=excluded.bluetooth_supported,bluetooth_connected=excluded.bluetooth_connected,
+    printer_connected=excluded.printer_connected,printer_name=excluded.printer_name,printer_id=excluded.printer_id,
+    user_agent=excluded.user_agent,last_seen=CURRENT_TIMESTAMP`)
+    .run(clientId, req.user.id, req.user.username, body.bluetoothSupported ? 1 : 0, body.bluetoothConnected ? 1 : 0,
+      body.printerConnected ? 1 : 0, String(body.printerName || '').slice(0, 200) || null,
+      String(body.printerId || '').slice(0, 200) || null, String(body.userAgent || '').slice(0, 500));
+  res.json({ ok: true, serverTime: new Date().toISOString() });
+});
 
 app.get('/api/logins', auth, (req: any, res) => {
   const rows = db.prepare('SELECT id,username,event,success,detail,created_at FROM login_events ORDER BY id DESC LIMIT 500').all();
@@ -140,6 +168,90 @@ app.get('/api/logins', auth, (req: any, res) => {
 app.get('/api/audit', auth, (req: any, res) => {
   const rows = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 1000').all();
   audit(req.user, 'audit.viewed', 'audit_log'); res.json(rows);
+});
+
+
+// Administrator console APIs. Client heartbeats and dashboard refreshes run every 3 seconds.
+app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
+  const users = db.prepare(`SELECT u.id,u.username,u.display_name AS displayName,u.role,u.created_at AS createdAt,
+    (SELECT COUNT(*) FROM passkeys p WHERE p.user_id=u.id) AS passkeyCount,
+    (SELECT COUNT(*) FROM sessions s WHERE s.user_id=u.id AND s.expires_at>?) AS activeSessions,
+    (SELECT MAX(le.created_at) FROM login_events le WHERE le.user_id=u.id AND le.event='login' AND le.success=1) AS lastLogin
+    FROM users u ORDER BY u.created_at DESC`).all(Date.now());
+  const clients = db.prepare(`SELECT c.client_id AS clientId,c.user_id AS userId,c.username,
+    CASE WHEN c.online=1 AND datetime(c.last_seen)>=datetime('now','-10 seconds') THEN 1 ELSE 0 END AS online,
+    c.bluetooth_supported AS bluetoothSupported,c.bluetooth_connected AS bluetoothConnected,
+    c.printer_connected AS printerConnected,c.printer_name AS printerName,c.printer_id AS printerId,
+    c.user_agent AS userAgent,c.last_seen AS lastSeen FROM client_status c ORDER BY c.last_seen DESC`).all();
+  const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();
+  const jobs = db.prepare('SELECT * FROM daily_jobs ORDER BY created_at DESC LIMIT 200').all();
+  res.json({ users, clients, operations, jobs, serverTime: new Date().toISOString() });
+});
+app.post('/api/admin/users/:id/role', auth, requireAdmin, (req: any, res) => {
+  const role = String(req.body.role || '');
+  if (!['user','admin'].includes(role)) return res.status(400).json({ error: 'Role must be user or admin' });
+  const target = db.prepare('SELECT id,username,role FROM users WHERE id=?').get(req.params.id) as any;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.id === req.user.id && role !== 'admin') return res.status(400).json({ error: 'You cannot remove your own administrator role' });
+  if (configuredAdminUsernames.has(target.username) && role !== 'admin') return res.status(400).json({ error: 'This account is configured as an administrator in ADMIN_USERNAMES' });
+  if (target.role === 'admin' && role !== 'admin' && (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin'").get() as any).n <= 1)
+    return res.status(400).json({ error: 'At least one administrator must remain' });
+  db.prepare('UPDATE users SET role=? WHERE id=?').run(role, target.id);
+  audit(req.user, 'admin.user_role_changed', 'user', target.id, { username: target.username, role });
+  res.json({ ok: true });
+});
+app.delete('/api/admin/users/:id', auth, requireAdmin, (req: any, res) => {
+  const target = db.prepare('SELECT id,username,role FROM users WHERE id=?').get(req.params.id) as any;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
+  if (configuredAdminUsernames.has(target.username)) return res.status(400).json({ error: 'This account is configured in ADMIN_USERNAMES and cannot be deleted here' });
+  if (target.role === 'admin' && (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin'").get() as any).n <= 1)
+    return res.status(400).json({ error: 'At least one administrator must remain' });
+  audit(req.user, 'admin.user_deleted', 'user', target.id, { username: target.username });
+  db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);
+  db.prepare('DELETE FROM users WHERE id=?').run(target.id);
+  res.json({ ok: true });
+});
+app.post('/api/admin/clients/:clientId/logout', auth, requireAdmin, (req: any, res) => {
+  const clientId = String(req.params.clientId).slice(0,128);
+  const client = db.prepare('SELECT user_id,username FROM client_status WHERE client_id=?').get(clientId) as any;
+  if (!client) return res.status(404).json({ error: 'Client session not found' });
+  db.prepare('DELETE FROM sessions WHERE user_id=? AND client_id=?').run(client.user_id, clientId);
+  db.prepare('UPDATE client_status SET online=0,last_seen=CURRENT_TIMESTAMP WHERE client_id=?').run(clientId);
+  audit(req.user, 'admin.client_forced_logout', 'client', clientId, { username: client.username });
+  res.json({ ok: true });
+});
+app.post('/api/admin/operations', auth, requireAdmin, (req: any, res) => {
+  const title = String(req.body.title || '').trim(), content = String(req.body.content || '').trim();
+  if (!title) return res.status(400).json({ error: 'Operation title is required' });
+  const entityId = id();
+  db.prepare('INSERT INTO audit_log(user_id,username,action,entity_type,entity_id,detail) VALUES(?,?,?,?,?,?)')
+    .run(req.user.id, req.user.username, 'manual.operation', 'manual', entityId, JSON.stringify({ title, content }));
+  audit(req.user, 'admin.operation_created', 'audit_log', entityId, { title });
+  res.status(201).json({ ok: true, id: entityId });
+});
+app.delete('/api/admin/operations/:id', auth, requireAdmin, (req: any, res) => {
+  const target = db.prepare('SELECT id,action,entity_type,entity_id FROM audit_log WHERE id=?').get(Number(req.params.id)) as any;
+  if (!target) return res.status(404).json({ error: 'Operation record not found' });
+  db.prepare('DELETE FROM audit_log WHERE id=?').run(target.id);
+  audit(req.user, 'admin.operation_deleted', 'audit_log', String(target.id), { action: target.action, entityType: target.entity_type, entityId: target.entity_id });
+  res.json({ ok: true });
+});
+app.post('/api/admin/jobs', auth, requireAdmin, (req: any, res) => {
+  const title = String(req.body.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'Work title is required' });
+  const jobId = id(), jobDate = String(req.body.jobDate || new Date().toISOString().slice(0,10));
+  db.prepare('INSERT INTO daily_jobs(id,job_date,title,status,detail) VALUES(?,?,?,?,?)')
+    .run(jobId, jobDate, title, String(req.body.status || 'created').slice(0,40), String(req.body.detail || ''));
+  audit(req.user, 'admin.work_created', 'daily_job', jobId, { title, jobDate });
+  res.status(201).json({ ok: true, id: jobId });
+});
+app.delete('/api/admin/jobs/:id', auth, requireAdmin, (req: any, res) => {
+  const target = db.prepare('SELECT id,title,job_date FROM daily_jobs WHERE id=?').get(req.params.id) as any;
+  if (!target) return res.status(404).json({ error: 'Work record not found' });
+  db.prepare('DELETE FROM daily_jobs WHERE id=?').run(target.id);
+  audit(req.user, 'admin.work_deleted', 'daily_job', target.id, { title: target.title, jobDate: target.job_date });
+  res.json({ ok: true });
 });
 
 const storage = multer.diskStorage({
@@ -220,7 +332,7 @@ app.post('/api/jobs', auth, (req: any, res) => {
 });
 function createDailyJob() {
   const date = new Intl.DateTimeFormat('en-CA', { timeZone: process.env.TZ || 'Asia/Singapore', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  const exists = db.prepare('SELECT id FROM daily_jobs WHERE job_date=?').get(date);
+  const exists = db.prepare("SELECT id FROM daily_jobs WHERE job_date=? AND title='每日自動工作記錄'").get(date);
   if (!exists) {
     const jid = id();
     db.prepare('INSERT INTO daily_jobs(id,job_date,title,status,detail) VALUES(?,?,?,?,?)').run(jid, date, '每日自動工作記錄', 'created', '系統於每日 00:00 自動建立');

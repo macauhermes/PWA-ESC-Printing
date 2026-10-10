@@ -49,6 +49,12 @@ CREATE TABLE IF NOT EXISTS client_work (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_client_work_client_created ON client_work(client_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS work_media (
+  id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES client_work(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL, original_name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_work_media_work ON work_media(work_id, created_at);
 CREATE TABLE IF NOT EXISTS daily_jobs (
   id TEXT PRIMARY KEY, job_date TEXT NOT NULL, title TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'created', detail TEXT NOT NULL DEFAULT '',
@@ -80,6 +86,8 @@ if (!workColumns.some(c => c.name === 'printer_name')) db.exec('ALTER TABLE clie
 const sessionColumns = db.pragma('table_info(sessions)') as { name: string }[];
 if (!sessionColumns.some(c => c.name === 'client_id')) db.exec('ALTER TABLE sessions ADD COLUMN client_id TEXT');
 if (!sessionColumns.some(c => c.name === 'login_type')) db.exec("ALTER TABLE sessions ADD COLUMN login_type TEXT NOT NULL DEFAULT 'passkey'");
+const pushColumns = db.pragma('table_info(push_subscriptions)') as { name: string }[];
+if (!pushColumns.some(c => c.name === 'client_id')) db.exec('ALTER TABLE push_subscriptions ADD COLUMN client_id TEXT');
 const notificationColumns = db.pragma('table_info(notifications)') as { name: string }[];
 if (!notificationColumns.some(c => c.name === 'target_client_id')) db.exec('ALTER TABLE notifications ADD COLUMN target_client_id TEXT');
 if (!notificationColumns.some(c => c.name === 'created_at')) db.exec("ALTER TABLE notifications ADD COLUMN created_at TEXT NOT NULL DEFAULT '1970-01-01 00:00:00'");

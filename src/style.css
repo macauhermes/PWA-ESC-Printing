@@ -7,3 +7,14 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 .receipt-columns{display:flex;justify-content:space-between;gap:8px;font-family:monospace;font-size:11px;margin:7px 0}.receipt-columns span:first-child{min-width:0;overflow-wrap:anywhere}.receipt-columns span:last-child{text-align:right;white-space:nowrap}.receipt-columns.total{font-weight:800;border-top:1px dashed #aaa;padding-top:8px}
 
 .media-open-button{background:#eef2ff;color:#1d4ed8;border:1px solid #c7d2fe;padding:8px 10px;font-size:13px;max-width:100%;overflow-wrap:anywhere}.media-viewer-backdrop{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:clamp(8px,3vw,28px);background:rgba(8,12,22,.82);overscroll-behavior:contain}.media-viewer-dialog{display:flex;flex-direction:column;width:min(1100px,100%);height:min(92dvh,900px);max-height:92dvh;background:#111827;color:#f9fafb;border:1px solid #374151;border-radius:14px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.45)}.media-viewer-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid #374151;flex-shrink:0}.media-viewer-header strong{overflow-wrap:anywhere;font-size:14px}.media-viewer-close{flex-shrink:0;background:#374151;color:white;padding:8px 12px}.media-viewer-content{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:10px;overflow:auto}.media-viewer-content img{display:block;max-width:100%;max-height:100%;width:auto;height:auto;object-fit:contain}.media-viewer-content video{display:block;width:100%;height:100%;max-height:100%;object-fit:contain;background:#000}.media-viewer-content video:focus{outline:2px solid #60a5fa}@media(max-width:600px){.media-viewer-backdrop{padding:0}.media-viewer-dialog{width:100%;height:100dvh;max-height:100dvh;border-radius:0;border:0}.media-viewer-content{padding:6px}.media-open-button{flex:1;text-align:left}}
+
+
+/* Event date/time input sizing and attachment upload feedback */
+.event-date-field{min-width:0;width:100%;}
+.event-datetime-input{display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box;text-align:left;text-align-last:left;direction:ltr;font-size:16px;padding:10px 8px;}
+.event-datetime-input::-webkit-date-and-time-value{text-align:left;}
+.upload-progress{margin:12px 0;padding:12px;border:1px solid #bfdbfe;border-radius:10px;background:#eff6ff;color:#1e3a8a;min-width:0;}
+.upload-progress-heading,.upload-progress-details{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;}
+.upload-progress progress{display:block;width:100%;height:10px;margin:9px 0;accent-color:#2563eb;}
+.upload-progress-details{color:#475569;font-size:12px;}
+@media(max-width:600px){.event-datetime-input{padding:10px 6px;font-size:16px;letter-spacing:-.2px;}.upload-progress-heading,.upload-progress-details{align-items:flex-start;}}

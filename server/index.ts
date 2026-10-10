@@ -370,6 +370,8 @@ app.post('/api/push/test', auth, async (req: any, res) => {
   res.json({ sent: result.filter(r => r.status === 'fulfilled').length, total: subs.length });
 });
 
+app.get('/api/notifications', auth, (req: any, res) => { res.json([]); });
+
 const requireIconv = () => iconvLite;
 
 app.post('/api/receipt/encode', auth, (req: any, res) => {

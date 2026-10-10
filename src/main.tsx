@@ -128,7 +128,7 @@ function App() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : '';
         if (msg.includes('401') || msg.includes('Session expired') || msg.includes('Authentication required')) {
-          localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null);
+          localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null); setTab('printer');
           setMessage('此客戶端工作階段已被管理員結束，請重新登入。');
         }
       }
@@ -192,7 +192,7 @@ function App() {
   }
   async function logout() {
     try { if (token) await api('/auth/logout', token, { method: 'POST' }); } catch {}
-    localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null); setMessage('已登出');
+    localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null); setTab('printer'); setMessage('已登出');
   }
 
   async function scanPrinter() {

@@ -73,6 +73,7 @@ const sessionColumns = db.pragma('table_info(sessions)') as { name: string }[];
 if (!sessionColumns.some(c => c.name === 'client_id')) db.exec('ALTER TABLE sessions ADD COLUMN client_id TEXT');
 const notificationColumns = db.pragma('table_info(notifications)') as { name: string }[];
 if (!notificationColumns.some(c => c.name === 'target_client_id')) db.exec('ALTER TABLE notifications ADD COLUMN target_client_id TEXT');
+if (!notificationColumns.some(c => c.name === 'created_at')) db.exec("ALTER TABLE notifications ADD COLUMN created_at TEXT NOT NULL DEFAULT '1970-01-01 00:00:00'");
 db.exec('CREATE TABLE IF NOT EXISTS notification_reads (notification_id TEXT NOT NULL, client_id TEXT NOT NULL, read_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(notification_id, client_id))');
 const jobsTable = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='daily_jobs'").get() as { sql: string } | undefined;
 if (jobsTable?.sql && /job_date\s+TEXT\s+NOT NULL\s+UNIQUE/i.test(jobsTable.sql)) {

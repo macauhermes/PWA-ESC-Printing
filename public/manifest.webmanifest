@@ -1,0 +1,11 @@
+{
+  "name": "PWA ESC Printing",
+  "short_name": "ESC Printing",
+  "description": "BLE thermal printer, receipts, event records and audit history",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f3f4f6",
+  "theme_color": "#111827",
+  "lang": "zh-Hant",
+  "icons": []
+}

@@ -161,11 +161,11 @@ app.post('/api/client/heartbeat', auth, (req: any, res) => {
   res.json({ ok: true, serverTime: new Date().toISOString() });
 });
 
-app.get('/api/logins', auth, (req: any, res) => {
+app.get('/api/logins', auth, requireAdmin, (req: any, res) => {
   const rows = db.prepare('SELECT id,username,event,success,detail,created_at FROM login_events ORDER BY id DESC LIMIT 500').all();
   audit(req.user, 'logins.viewed', 'login_events'); res.json(rows);
 });
-app.get('/api/audit', auth, (req: any, res) => {
+app.get('/api/audit', auth, requireAdmin, (req: any, res) => {
   const rows = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 1000').all();
   audit(req.user, 'audit.viewed', 'audit_log'); res.json(rows);
 });
@@ -280,7 +280,7 @@ app.delete('/api/events/:id', auth, (req: any, res) => {
   db.prepare('DELETE FROM events WHERE id=?').run(req.params.id);
   audit(req.user, 'event.deleted', 'event', req.params.id); res.json({ ok: true });
 });
-app.post('/api/records/clear', auth, (req: any, res) => {
+app.post('/api/records/clear', auth, requireAdmin, (req: any, res) => {
   const requested = Array.isArray(req.body.categories) ? req.body.categories.map(String) : [];
   const allowed = new Set(['events', 'jobs', 'logins', 'printer_preferences', 'push_subscriptions']);
   const invalid = requested.filter((c: string) => !allowed.has(c));

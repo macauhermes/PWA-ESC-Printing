@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS media (
 );
 CREATE TABLE IF NOT EXISTS client_work (
   id TEXT PRIMARY KEY, client_id TEXT NOT NULL, user_id TEXT NOT NULL, username TEXT NOT NULL,
-  title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', event_date TEXT,
+  title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', event_date TEXT, printer_name TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_client_work_client_created ON client_work(client_id, created_at DESC);
@@ -75,6 +75,8 @@ CREATE INDEX IF NOT EXISTS idx_client_status_last_seen ON client_status(last_see
 CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL);
 `);
 
+const workColumns = db.pragma('table_info(client_work)') as { name: string }[];
+if (!workColumns.some(c => c.name === 'printer_name')) db.exec('ALTER TABLE client_work ADD COLUMN printer_name TEXT');
 const sessionColumns = db.pragma('table_info(sessions)') as { name: string }[];
 if (!sessionColumns.some(c => c.name === 'client_id')) db.exec('ALTER TABLE sessions ADD COLUMN client_id TEXT');
 if (!sessionColumns.some(c => c.name === 'login_type')) db.exec("ALTER TABLE sessions ADD COLUMN login_type TEXT NOT NULL DEFAULT 'passkey'");

@@ -71,6 +71,37 @@ npm start
 
 將應用部署在 HTTPS 網域，並確保程序管理器在伺服器重啟後啟動 API。SQLite 與 uploads 必須放在持久化磁碟，不可使用每次部署會清空的暫存檔案系統。午夜排程只有在 Node 服務正在運行時才會觸發；服務啟動時會補上當日缺少的工作記錄。
 
+## Docker Compose 部署
+
+Docker 映像使用 Node.js 26.11，建置 Vite 前端及 Express API，容器內 API 監聽 `8787`（不是 Next.js 的 `3000`）。SQLite 與上傳檔案使用 Docker named volumes，容器重建後仍會保留。
+
+首次部署前，請在專案目錄執行：
+
+```bash
+cp .env.example .env
+# 編輯 .env，至少設定 ADMIN_USERNAMES、SESSION_SECRET；
+# 正式環境請確認 VAPID 金鑰及其他設定。
+```
+
+Compose 設定目前使用既有反向代理 Docker network `db_default`，並設定網域 `pwa.jasonhoi.com`。請先確認該網絡已由你的反向代理建立：
+
+```bash
+docker network ls
+# 若尚未建立，而且反向代理確實預期使用此名稱，才建立：
+docker network create db_default
+```
+
+啟動與檢查：
+
+```bash
+docker compose config
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=200 app
+```
+
+健康檢查端點為容器內的 `http://127.0.0.1:8787/api/health`。若使用不同網域，請同步修改 `docker-compose.yml` 的 `APP_ORIGIN`、`RP_ID`、`VIRTUAL_HOST`、`LETSENCRYPT_HOST` 和電郵設定。Passkey/WebAuthn 的 `APP_ORIGIN` 必須與使用者實際開啟的 HTTPS 網址一致。不要刪除 `app-data` 或 `app-uploads` volumes，否則會失去持久化資料。
+
 ## 限制及後續工作
 
 - Web Bluetooth 不允許網站任意掃描或在沒有使用者手勢/授權時靜默重新連線。瀏覽器 IndexedDB 保存的裝置 ID 不是可跨裝置/瀏覽器重用的永久硬體識別碼；若瀏覽器不提供 `getDevices()` 或授權被撤銷，使用者可能需要再次選取。

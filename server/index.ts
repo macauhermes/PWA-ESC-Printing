@@ -221,6 +221,18 @@ app.post('/api/admin/clients/:clientId/logout', auth, requireAdmin, (req: any, r
   audit(req.user, 'admin.client_forced_logout', 'client', clientId, { username: client.username });
   res.json({ ok: true });
 });
+app.post('/api/admin/notifications', auth, requireAdmin, (req: any, res) => {
+  const title = String(req.body.title || '').trim().slice(0, 200);
+  const body = String(req.body.body || '').trim().slice(0, 5000);
+  const target = String(req.body.targetClientId || '').trim().slice(0, 128) || null;
+  if (!title || !body) return res.status(400).json({ error: 'Title and body are required' });
+  if (target && !db.prepare('SELECT client_id FROM client_status WHERE client_id=?').get(target)) return res.status(404).json({ error: 'Client not found' });
+  const notificationId = id();
+  db.prepare('INSERT INTO notifications(id,title,body,target_client_id) VALUES(?,?,?,?)').run(notificationId, title, body, target);
+  audit(req.user, 'admin.notification_sent', 'notification', notificationId, { targetClientId: target });
+  res.status(201).json({ ok: true, id: notificationId });
+});
+
 app.post('/api/admin/operations', auth, requireAdmin, (req: any, res) => {
   const title = String(req.body.title || '').trim(), content = String(req.body.content || '').trim();
   if (!title) return res.status(400).json({ error: 'Operation title is required' });

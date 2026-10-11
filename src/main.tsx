@@ -635,7 +635,7 @@ function App() {
   }
   async function uploadCurrentWork() {
     const oversized = workMedia.filter(file => file.size > MAX_ATTACHMENT_BYTES);
-    if (oversized.length) { setMessage(\`單一附件上限為 500 MiB，以下檔案超出限制：\${oversized.map(file=>file.name).join('、')}\`); return; }
+    if (oversized.length) { setMessage(`單一附件上限為 500 MiB，以下檔案超出限制：${oversized.map(file=>file.name).join('、')}`); return; }
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
     setWorkSubmitting(true);
     try {
@@ -644,10 +644,10 @@ function App() {
       setLocalDrafts(old => [draft, ...old]);
       clearWorkForm();
       if (remoteOnline) {
-        setMessage(\`事件 \${draft.eventCode} 已加入上傳隊列，正在背景上傳；你可以繼續建立新事件。\`);
+        setMessage(`事件 ${draft.eventCode} 已加入上傳隊列，正在背景上傳；你可以繼續建立新事件。`);
         void uploadLocalWork(draft);
       } else {
-        setMessage(\`遠端未連線，事件 \${draft.eventCode} 已加入本機上傳隊列，恢復連線後會自動重試。\`);
+        setMessage(`遠端未連線，事件 ${draft.eventCode} 已加入本機上傳隊列，恢復連線後會自動重試。`);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '無法將事件保存至本機上傳隊列；表單內容仍保留，請檢查儲存空間後重試。');
@@ -657,13 +657,13 @@ function App() {
   async function saveLocalWork(e: React.FormEvent) {
     e.preventDefault();
     const oversized = workMedia.filter(file => file.size > MAX_ATTACHMENT_BYTES);
-    if (oversized.length) { setMessage(\`單一附件上限為 500 MiB，以下檔案超出限制：\${oversized.map(file=>file.name).join('、')}\`); return; }
+    if (oversized.length) { setMessage(`單一附件上限為 500 MiB，以下檔案超出限制：${oversized.map(file=>file.name).join('、')}`); return; }
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
     setWorkSubmitting(true);
     try {
       const draft = draftFromForm(await createEventCode());
       await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
-      setMessage(\`事件已暫存在手機。事件編號：\${draft.eventCode}\`);
+      setMessage(`事件已暫存在手機。事件編號：${draft.eventCode}`);
     } catch (err) { setMessage(err instanceof Error ? err.message : '手機暫存失敗；可能是裝置儲存空間不足。請減少影片大小後再試。'); }
     finally { setWorkSubmitting(false); }
   }
@@ -684,7 +684,7 @@ function App() {
       Object.keys(next).filter(key => key.startsWith('form:')).forEach(key => delete next[key]);
       return next;
     });
-    setMessage(\`已移除附件：\${removed?.name || '附件'}\`);
+    setMessage(`已移除附件：${removed?.name || '附件'}`);
   }
 
   async function uploadLocalWork(draft: LocalDraft) {

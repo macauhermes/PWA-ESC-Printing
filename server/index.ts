@@ -380,7 +380,7 @@ const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => cb(null, crypto.randomUUID() + path.extname(file.originalname).slice(0, 12))
 });
-const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024, files: 20 }, fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) });
+const upload = multer({ storage, limits: { fileSize: 250 * 1024 * 1024, files: 20 }, fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) });
 // Mobile clients may keep work locally and upload it only when requested.
 app.get('/api/work', auth, (req: any, res) => {
   const clientId = String(req.user.client_id || '').slice(0, 128);
@@ -416,6 +416,9 @@ app.post('/api/work', auth, upload.array('media', 20), (req: any, res) => {
   const content = String(req.body.content || '').trim().slice(0, 10000);
   const eventDate = String(req.body.eventDate || '').trim().slice(0, 40) || null;
   const eventCode = String(req.body.eventCode || '').trim().slice(0, 64) || null;
+  const submittedCreatedAt = String(req.body.createdAt || '').trim();
+  const parsedCreatedAt = submittedCreatedAt ? Date.parse(submittedCreatedAt) : NaN;
+  const createdAt = Number.isFinite(parsedCreatedAt) ? new Date(parsedCreatedAt).toISOString() : new Date().toISOString();
   const files = (req.files || []) as Express.Multer.File[];
   if (!clientId) {
     for (const file of files) try { fs.unlinkSync(file.path); } catch {}
@@ -428,14 +431,14 @@ app.post('/api/work', auth, upload.array('media', 20), (req: any, res) => {
   const workId = id();
   const printerName = (db.prepare('SELECT printer_name FROM client_status WHERE client_id=?').get(clientId) as { printer_name?: string } | undefined)?.printer_name || null;
   const transaction = db.transaction(() => {
-    db.prepare('INSERT INTO client_work(id,client_id,user_id,username,title,content,event_date,printer_name,event_code) VALUES(?,?,?,?,?,?,?,?,?)')
-      .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate, printerName, eventCode);
+    db.prepare('INSERT INTO client_work(id,client_id,user_id,username,title,content,event_date,printer_name,event_code,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)')
+      .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate, printerName, eventCode, createdAt);
     for (const file of files) db.prepare('INSERT INTO work_media(id,work_id,kind,filename,mime_type,original_name) VALUES(?,?,?,?,?,?)')
       .run(id(), workId, file.mimetype.startsWith('image/') ? 'image' : 'video', file.filename, file.mimetype, file.originalname);
   });
   try { transaction(); } catch (err) { for (const file of files) try { fs.unlinkSync(file.path); } catch {}; throw err; }
   audit(req.user, 'client.work_uploaded', 'client_work', workId, { clientId, title, printerName, mediaCount: files.length });
-  res.status(201).json({ id: workId, clientId, title, content, eventDate, eventCode, printerName, mediaCount: files.length, createdAt: new Date().toISOString() });
+  res.status(201).json({ id: workId, clientId, title, content, eventDate, eventCode, printerName, mediaCount: files.length, createdAt });
 });
 
 app.get('/api/events', auth, (req: any, res) => {

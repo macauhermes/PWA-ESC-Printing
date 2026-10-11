@@ -105,7 +105,7 @@ function makeEventCode(sequence: number, deviceCode: string, date = new Date()) 
 const DAY_MS = 24 * 60 * 60 * 1000;
 function timestampMs(value: string | undefined) {
   if (!value) return 0;
-  const normalized = value.includes('T') || /Z$|[+-]\\d\\d:\\d\\d$/.test(value) ? value : value.replace(' ', 'T') + 'Z';
+  const normalized = value.includes('T') || /Z$|[+-]\d\d:\d\d$/.test(value) ? value : value.replace(' ', 'T') + 'Z';
   const parsed = Date.parse(normalized);
   return Number.isFinite(parsed) ? parsed : 0;
 }
@@ -470,10 +470,10 @@ function App() {
     if (!code) throw new Error('此設備尚未取得後台派發的設備碼。請先在可連線時完成註冊或登入，再建立離線事件。');
     return makeEventCode(await nextLocalEventSequence(), code, new Date());
   }
-  function draftFromForm(eventCode: string, syncStatus: LocalDraft['syncStatus'] = 'draft'): LocalDraft {
+  function draftFromForm(eventCode: string, syncStatus: LocalDraft['syncStatus'] = 'draft', createdAt = new Date().toISOString()): LocalDraft {
     return {
       id: crypto.randomUUID(), title: workTitle.trim(), content: workContent.trim(), eventDate: workDate,
-      createdAt: new Date().toISOString(), eventCode, syncStatus,
+      createdAt, eventCode, syncStatus,
       media: workMedia.map(file => ({ name:file.name, originalName:file.name, kind:file.type.startsWith('video/') ? 'video' : 'image', mimeType:file.type, size:file.size, blob:file }))
     };
   }
@@ -488,15 +488,16 @@ function App() {
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
     setBusy(true);
     let eventCode = '';
+    const createdAt = new Date().toISOString();
     try {
       eventCode = await createEventCode();
       if (!remoteOnline) {
-        const draft = draftFromForm(eventCode, 'queued');
+        const draft = draftFromForm(eventCode, 'queued', createdAt);
         await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
         setMessage(`遠端未連線，事件 ${eventCode} 已加入本機上傳隊列，恢復連線後會自動重試。`);
         return;
       }
-      const data = new FormData(); data.append('title', title); data.append('content', workContent.trim()); data.append('eventDate', workDate); data.append('eventCode', eventCode);
+      const data = new FormData(); data.append('title', title); data.append('content', workContent.trim()); data.append('eventDate', workDate); data.append('eventCode', eventCode); data.append('createdAt', createdAt);
       workMedia.forEach(file => data.append('media', file, file.name));
       setUploadProgress({ loaded:0, total:0, percent:0, bytesPerSecond:0 });
       await uploadFormDataWithProgress('/work', token, data, setUploadProgress);
@@ -506,7 +507,7 @@ function App() {
     } catch (err) {
       if (isConnectivityFailure(err) && eventCode && workTitle.trim()) {
         try {
-          const draft = draftFromForm(eventCode, 'queued');
+          const draft = draftFromForm(eventCode, 'queued', createdAt);
           await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
           setMessage(`遠端連線中斷，事件 ${eventCode} 已加入本機上傳隊列，稍後會自動重試。`);
         } catch { setMessage('上傳失敗，而且無法保存至本機隊列。請勿關閉頁面，檢查裝置儲存空間後重試。'); }
@@ -539,7 +540,7 @@ function App() {
     setBusy(true); setLocalDrafts(old => old.map(item => item.id === draft.id ? uploading : item));
     await saveLocalDraft(uploading).catch(() => {});
     try {
-      const data = new FormData(); data.append('title', draft.title); data.append('content', draft.content); data.append('eventDate', draft.eventDate); data.append('eventCode', draft.eventCode);
+      const data = new FormData(); data.append('title', draft.title); data.append('content', draft.content); data.append('eventDate', draft.eventDate); data.append('eventCode', draft.eventCode); data.append('createdAt', draft.createdAt);
       draft.media.forEach(file => { if (file.blob) data.append('media', file.blob, file.name || file.originalName || 'attachment'); });
       setUploadProgress({ loaded:0, total:0, percent:0, bytesPerSecond:0 });
       await uploadFormDataWithProgress('/work', token, data, setUploadProgress);
@@ -691,9 +692,9 @@ function App() {
           <p className="hint">手機暫存只保存在目前瀏覽器／裝置；清除網站資料或更換裝置可能導致暫存遺失。暫存內容不會出現在後台，直到按下「上傳系統」。</p>
         </article>
         <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.length} 項</p></div></div>
-          {!localDrafts.length ? <p className="muted">目前沒有手機暫存事件。</p> : localDrafts.map(draft=><div className="list-item" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p>{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=><button type="button" className="media-open-button" key={m.id || m.name || i} onClick={()=>openMediaViewer(m)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 播放影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button>)}</div>}<div className="actions"><button disabled={busy} onClick={()=>void uploadLocalWork(draft)}>上傳事件及附件</button><button className="danger compact" disabled={busy} onClick={()=>void deleteLocalWork(draft.id)}>刪除暫存</button></div></div>)}
+          {!localDrafts.some(draft => remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">目前沒有手機暫存事件。</p> : localDrafts.filter(draft => remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="list-item" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode}</p><p className="muted">{draft.content || '（沒有備註）'}</p><div className="expiry-countdown"><div className="expiry-heading"><span>本機保存倒計時</span><strong>{countdownLabel(draft.createdAt, clockNow).label}</strong></div><div className="expiry-track"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div><p className="muted">附件：{draft.media.length} 個 · {draft.syncStatus === 'queued' ? '等待連線，自動重試中' : draft.syncStatus === 'uploading' ? '正在上傳…' : draft.syncStatus === 'failed' ? '上次上傳失敗，請手動重試' : '尚未上傳'}</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=><button type="button" className="media-open-button" key={m.id || m.name || i} onClick={()=>openMediaViewer(m)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 播放影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button>)}</div>}<div className="actions"><button disabled={busy} onClick={()=>void uploadLocalWork(draft)}>上傳事件及附件</button><button className="danger compact" disabled={busy} onClick={()=>void deleteLocalWork(draft.id)}>刪除暫存</button></div></div>)}
         </article>
-        <article className="panel"><h2>已上傳事件</h2><p className="muted">只顯示目前登入客戶端已上傳至系統的工作記錄。點擊附件會在頁面內開啟預覽，不會離開目前畫面。</p>{!uploadedWork.length ? <p className="muted">尚無已上傳事件。</p> : uploadedWork.map(item=><div className="list-item" key={item.id}><div className="list-heading"><strong>{item.title}</strong><small>{item.eventDate || item.createdAt}</small></div><p>{item.content || '（沒有備註）'}</p><span className="status">已上傳</span><div className="media-list">{(item.media || []).map((m,i)=><button type="button" className="media-open-button" key={m.id || i} onClick={()=>openMediaViewer(m)}>{m.kind==='video' || m.mimeType?.startsWith('video/') ? '▶ 播放影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button>)}</div></div>)}</article>
+        <article className="panel"><h2>已上傳事件</h2><p className="muted">只顯示目前登入客戶端已上傳至系統的工作記錄。點擊附件會在頁面內開啟預覽，不會離開目前畫面。</p>{!uploadedWork.some(item => remainingMs(item.createdAt, clockNow) > 0) ? <p className="muted">尚無 24 小時內的已上傳事件。</p> : uploadedWork.filter(item => remainingMs(item.createdAt, clockNow) > 0).map(item=><div className="list-item" key={item.id}><div className="list-heading"><strong>{item.title}</strong><small>{item.eventDate || item.createdAt}</small></div>{item.eventCode && <p className="event-code">事件編號：{item.eventCode}</p>}<p className="muted">{item.content || '（沒有備註）'}</p><div className="expiry-countdown"><div className="expiry-heading"><span>客戶端可查看時間</span><strong>{countdownLabel(item.createdAt, clockNow).label}</strong></div><div className="expiry-track"><span style={{width:`${countdownLabel(item.createdAt, clockNow).percent}%`}} /></div></div><span className="status">已上傳</span><div className="media-list">{(item.media || []).map((m,i)=><button type="button" className="media-open-button" key={m.id || i} onClick={()=>openMediaViewer(m)}>{m.kind==='video' || m.mimeType?.startsWith('video/') ? '▶ 播放影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button>)}</div></div>)}</article>
       </section>}
       {tab === 'clear-records' && <section className="grid two"><article className="panel"><h2>清除持久化記錄</h2><p className="muted">勾選需要刪除的資料類別。這是永久刪除操作，請先確認備份。</p>{[['events','事件及其圖片／影片附件'],['jobs','每日及手動工作記錄'],['logins','登入／登出歷史記錄'],['printer_preferences','伺服器保存的打印機偏好'],['push_subscriptions','推播訂閱資料']] .map(([key,label]) => <label className="check-row" key={key}><input type="checkbox" checked={clearSelections.includes(key)} onChange={e => setClearSelections(old => e.target.checked ? [...old,key] : old.filter(x => x !== key))} />{label}</label>)}<label className="check-row"><input type="checkbox" checked={clearLocalPrinter} onChange={e => setClearLocalPrinter(e.target.checked)} />本機瀏覽器 IndexedDB 打印機偏好</label><div className="warning-note">為保留可追溯性，操作稽核記錄不會被此頁清除；系統會追加一筆「清除記錄」操作。使用者帳戶、Passkey 與目前登入工作階段不會被刪除。</div><button className="danger" disabled={busy || (!clearSelections.length && !clearLocalPrinter)} onClick={clearPersistentRecords}>{busy ? '清除中…' : '永久清除所選記錄'}</button></article><article className="panel"><h2>資料保存位置</h2><p>伺服器資料庫：<code>./data/app.sqlite</code></p><p>事件媒體檔案：<code>./uploads/</code></p><p>本機打印機偏好：瀏覽器 IndexedDB（資料庫 <code>esc-printing-local</code>）。</p><p className="hint">清除事件會同時刪除事件資料、附件資料庫索引及對應媒體檔案。清除伺服器資料只影響此應用程式資料，不會清除瀏覽器的網站權限或作業系統藍牙配對。</p></article></section>}
       {tab === 'jobs' && <section className="grid two"><article className="panel"><h2>建立工作記錄</h2><form onSubmit={saveJob}><label>標題<input required value={jobTitle} onChange={e => setJobTitle(e.target.value)} /></label><label>內容<textarea rows={4} value={jobDetail} onChange={e => setJobDetail(e.target.value)} /></label><button disabled={busy}>新增工作</button></form><p className="hint">系統每日 00:00（Asia/Singapore 預設）建立一筆自動工作記錄。伺服器必須持續運行才能觸發排程；啟動時亦會補上當日缺失記錄。</p></article><article className="panel"><h2>工作歷史 <span className="count">{jobs.length}</span></h2><div className="table-wrap"><table><thead><tr><th>日期</th><th>工作</th><th>狀態</th><th>內容</th></tr></thead><tbody>{jobs.map(j => <tr key={j.id}><td>{j.job_date}</td><td>{j.title}</td><td><span className="status">{j.status}</span></td><td>{j.detail}</td></tr>)}</tbody></table></div></article></section>}
@@ -711,7 +712,7 @@ function App() {
     {mediaViewer && <div className="media-viewer-backdrop" role="presentation" onClick={closeMediaViewer}>
       <section className="media-viewer-dialog" role="dialog" aria-modal="true" aria-label="附件預覽" onClick={event => event.stopPropagation()}>
         <header className="media-viewer-header"><strong>{mediaViewer.name}</strong><button type="button" className="media-viewer-close" aria-label="關閉預覽" onClick={closeMediaViewer}>✕ 關閉</button></header>
-        <div className="media-viewer-content">{mediaViewer.kind === 'video' ? <video src={mediaViewer.src} controls autoPlay playsInline preload="metadata">此瀏覽器無法播放此影片。</video> : <img src={mediaViewer.src} alt={mediaViewer.name} />}</div>
+        <div className="media-viewer-content">{mediaViewer.kind === 'video' ? <video src={mediaViewer.src} controls playsInline preload="metadata" onError={() => setMessage('影片無法播放：請確認上傳已完成，且手機瀏覽器支援此影片的編碼格式。')}>此瀏覽器無法播放此影片。</video> : <img src={mediaViewer.src} alt={mediaViewer.name} onError={() => setMessage('圖片載入失敗，請檢查網絡連線或重新上傳附件。')} />}</div>
       </section>
     </div>}
   </div>;

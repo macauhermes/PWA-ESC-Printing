@@ -232,7 +232,7 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 @media(max-width:600px){
   .mobile-header-meta-row{gap:1em!important;}
   .mobile-header-system{gap:1em!important;}
-  .mobile-header-system .device-code-meta{color:#334e68!important;}
+  .mobile-header-system .device-code-meta{color:#bfdbfe!important;font-weight:700!important;}
   .mobile-header-user{gap:1em!important;max-width:52%!important;}
   .mobile-header-user .mobile-username{width:auto!important;max-width:92px!important;flex:0 1 auto!important;}
   .mobile-header-user .storage-label{display:none!important;}

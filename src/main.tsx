@@ -722,8 +722,9 @@ function App() {
     const cancelled = { ...draft, syncStatus:'cancelled' as const };
     try {
       await saveLocalDraft(cancelled);
+      localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? cancelled : item);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? cancelled : item));
-      setMessage(`事件 ${draft.eventCode} 已取消排程；可繼續上傳或刪除暫存。`);
+      setMessage(`事件 ${draft.eventCode} 已取消排程；可選擇繼續上傳或轉為暫存。`);
     } catch (err) { setMessage(err instanceof Error ? err.message : '保存取消狀態失敗，請重試。'); }
   }
   async function continueLocalWork(draft: LocalDraft) {
@@ -774,7 +775,7 @@ function App() {
       const retained = { ...draft, syncStatus:status };
       await saveLocalDraft(retained).catch(() => {});
       setLocalDrafts(old => old.map(item => item.id === draft.id ? retained : item));
-      if (status === 'cancelled') setMessage(`事件 ${draft.eventCode} 已取消上傳；可按「繼續上傳」重新排程，或刪除暫存。`);
+      if (status === 'cancelled') setMessage(`事件 ${draft.eventCode} 已取消上傳；可選擇「繼續上傳」或「轉為暫存」。`);
       else setMessage(status === 'queued' ? `事件 ${draft.eventCode} 上傳中斷，已保留在上傳隊列，稍後自動重試。` : (err instanceof Error ? err.message : '上傳失敗；本機事件仍保留，可手動繼續上傳。'));
     } finally {
       uploadingLocalWorkIds.current.delete(draft.id);
@@ -1027,7 +1028,10 @@ function App() {
               {draft.syncStatus === 'queued' || draft.syncStatus === 'uploading'
                 ? <button className="secondary compact" onClick={()=>void cancelLocalWork(draft)}>取消上傳</button>
                 : draft.syncStatus === 'cancelled' || draft.syncStatus === 'failed'
-                  ? <button className="secondary compact" onClick={()=>void continueLocalWork(draft)}>繼續上傳</button>
+                  ? <>
+                      <button className="secondary compact" onClick={()=>void continueLocalWork(draft)}>繼續上傳</button>
+                      <button className="secondary compact" onClick={()=>void convertQueueItemToDraft(draft)}>轉為暫存</button>
+                    </>
                   : null}
             </div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(draft.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div></div>)}
         </article>

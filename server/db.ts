@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS client_status (
   client_id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   username TEXT NOT NULL, online INTEGER NOT NULL DEFAULT 0, bluetooth_supported INTEGER NOT NULL DEFAULT 0,
   bluetooth_connected INTEGER NOT NULL DEFAULT 0, printer_connected INTEGER NOT NULL DEFAULT 0,
-  printer_name TEXT, printer_id TEXT, user_agent TEXT, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  printer_name TEXT, printer_id TEXT, user_agent TEXT, app_version TEXT, app_environment TEXT, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_client_status_last_seen ON client_status(last_seen DESC);
 CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL);
@@ -92,6 +92,9 @@ if (!userColumns.some(c => c.name === 'employee_name')) db.exec('ALTER TABLE use
 if (!userColumns.some(c => c.name === 'contact_phone')) db.exec('ALTER TABLE users ADD COLUMN contact_phone TEXT');
 if (!userColumns.some(c => c.name === 'contact_email')) db.exec('ALTER TABLE users ADD COLUMN contact_email TEXT');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_employee_number ON users(employee_number) WHERE employee_number IS NOT NULL');
+const clientStatusColumns = db.pragma('table_info(client_status)') as { name: string }[];
+if (!clientStatusColumns.some(c => c.name === 'app_version')) db.exec('ALTER TABLE client_status ADD COLUMN app_version TEXT');
+if (!clientStatusColumns.some(c => c.name === 'app_environment')) db.exec('ALTER TABLE client_status ADD COLUMN app_environment TEXT');
 
 const workColumns = db.pragma('table_info(client_work)') as { name: string }[];
 if (!workColumns.some(c => c.name === 'printer_name')) db.exec('ALTER TABLE client_work ADD COLUMN printer_name TEXT');

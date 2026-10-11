@@ -295,7 +295,7 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     FROM client_work w ORDER BY w.created_at DESC`).all() as any[];
   const workMedia = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   for (const work of deviceWork) work.media = workMedia.filter(m => m.workId === work.id).map(m => ({ ...m, url: '/uploads/' + m.filename }));
-  res.json({ users, clients, operations, jobs, deviceWork, serverTime: new Date().toISOString() });
+  res.json({ users, clients, operations, jobs, deviceWork, appVersion, appEnvironment, serverTime: new Date().toISOString() });
 });
 app.post('/api/admin/users/:id/role', auth, requireAdmin, (req: any, res) => {
   const role = String(req.body.role || '');

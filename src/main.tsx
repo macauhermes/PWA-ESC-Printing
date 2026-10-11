@@ -36,20 +36,10 @@ const api = async (path: string, token: string, init: RequestInit = {}) => {
 function uploadFormDataWithProgress(path: string, token: string, data: FormData, onProgress: (progress: UploadProgress) => void): Promise<any> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    let lastLoaded = 0;
-    let lastAt = Date.now();
-    let lastSpeed = 0;
     xhr.open('POST', '/api' + path);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.upload.onprogress = event => {
-      const now = Date.now();
-      const elapsed = (now - lastAt) / 1000;
-      if (elapsed >= 0.5) {
-        lastSpeed = Math.max(0, event.loaded - lastLoaded) / elapsed;
-        lastLoaded = event.loaded;
-        lastAt = now;
-      }
-      const snapshot = { loaded: event.loaded, total: event.lengthComputable ? event.total : 0, percent: event.lengthComputable && event.total > 0 ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null, bytesPerSecond: lastSpeed };
+      const snapshot = { loaded: event.loaded, total: event.lengthComputable ? event.total : 0, percent: event.lengthComputable && event.total > 0 ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null, bytesPerSecond: 0 };
       window.requestAnimationFrame(() => onProgress(snapshot));
     };
     xhr.onerror = () => reject(new Error('網絡連線中斷，請檢查網絡後重試。'));
@@ -63,63 +53,22 @@ function uploadFormDataWithProgress(path: string, token: string, data: FormData,
     xhr.send(data);
   });
 }
-const WORK_UPLOAD_CHUNK_BYTES = 180 * 1024;
-type ChunkableMedia = { blob: Blob; name: string; mimeType: string };
-async function uploadWorkInChunks(
-  token: string,
-  fields: { title:string; content:string; eventDate:string; eventCode:string; createdAt:string },
-  media: ChunkableMedia[],
-  onProgress: (progress: UploadProgress) => void
-) {
+type WorkUploadFields = { title:string; content:string; eventDate:string; eventCode:string; createdAt:string };
+async function uploadWorkAsMultipart(token: string, fields: WorkUploadFields, media: Array<{ blob:Blob; name:string; mimeType:string }>, onProgress: (progress: UploadProgress) => void) {
   const totalBytes = media.reduce((sum, file) => sum + file.blob.size, 0);
-  let completedBytes = 0;
-  const uploadedMediaIds: string[] = [];
-  const report = (loaded: number, speed = 0) => onProgress({
-    loaded: Math.min(totalBytes, loaded),
-    total: totalBytes,
-    percent: totalBytes > 0 ? Math.min(99, Math.round(Math.min(totalBytes, loaded) / totalBytes * 100)) : 99,
-    bytesPerSecond: speed
-  });
-  report(0);
-  for (const file of media) {
-    if (!file.blob.size) continue;
-    const uploadId = crypto.randomUUID();
-    const totalChunks = Math.ceil(file.blob.size / WORK_UPLOAD_CHUNK_BYTES);
-    for (let index = 0; index < totalChunks; index++) {
-      const start = index * WORK_UPLOAD_CHUNK_BYTES;
-      const chunk = file.blob.slice(start, Math.min(file.blob.size, start + WORK_UPLOAD_CHUNK_BYTES));
-      const data = new FormData();
-      data.append('uploadId', uploadId);
-      data.append('filename', file.name);
-      data.append('mimeType', file.mimeType || 'application/octet-stream');
-      data.append('totalSize', String(file.blob.size));
-      data.append('chunkSize', String(WORK_UPLOAD_CHUNK_BYTES));
-      data.append('index', String(index));
-      data.append('totalChunks', String(totalChunks));
-      data.append('chunk', chunk, 'chunk.bin');
-      const result = await uploadFormDataWithProgress('/work/chunk', token, data, progress => {
-        const inChunk = Math.min(chunk.size, progress.loaded);
-        report(completedBytes + inChunk, progress.bytesPerSecond);
-      });
-      if (index === totalChunks - 1) {
-        if (!result.mediaId) throw new Error('伺服器未確認影片／附件已接收，請重試。');
-        uploadedMediaIds.push(result.mediaId);
-      }
-    }
-    completedBytes += file.blob.size;
-    report(completedBytes);
-  }
-  const result = await api('/work', token, {
-    method: 'POST',
-    body: JSON.stringify({ ...fields, uploadedMediaIds })
+  const data = new FormData();
+  data.append('title', fields.title); data.append('content', fields.content); data.append('eventDate', fields.eventDate); data.append('eventCode', fields.eventCode); data.append('createdAt', fields.createdAt);
+  for (const file of media) data.append('media', file.blob, file.name || 'attachment');
+  onProgress({ loaded:0, total:totalBytes, percent:0, bytesPerSecond:0 });
+  await uploadFormDataWithProgress('/work', token, data, progress => {
+    const loaded = Math.min(totalBytes, progress.loaded);
+    onProgress({ loaded, total:totalBytes, percent:progress.percent === null ? null : Math.min(99, Math.round(loaded / Math.max(1, totalBytes) * 100)), bytesPerSecond:0 });
   });
   onProgress({ loaded:totalBytes, total:totalBytes, percent:100, bytesPerSecond:0 });
-  return result;
 }
 const formatBytes = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
 const formatUsedStorage = (bytes: number) => bytes < 1024 ** 3 ? `${(bytes / 1024 ** 2).toFixed(2)} MB` : `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 const formatStorageGB = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-const formatSpeed = (bytesPerSecond: number) => `${(bytesPerSecond / 1024 / 1024).toFixed(2)} MB/s`;
 const b64url = (s: string) => s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4);
 const b64 = (s: string) => Uint8Array.from(atob(b64url(s)), c => c.charCodeAt(0));
 const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, b => String.fromCharCode(b)).join(''));
@@ -643,7 +592,7 @@ function App() {
         return;
       }
       setUploadProgress({ loaded:0, total:workMedia.reduce((sum, file) => sum + file.size, 0), percent:0, bytesPerSecond:0 });
-      await uploadWorkInChunks(token, { title, content:workContent.trim(), eventDate:workDate, eventCode, createdAt }, workMedia.map(file => ({ blob:file, name:file.name, mimeType:file.type })), setUploadProgress);
+      await uploadWorkAsMultipart(token, { title, content:workContent.trim(), eventDate:workDate, eventCode, createdAt }, workMedia.map(file => ({ blob:file, name:file.name, mimeType:file.type })), setUploadProgress);
       setUploadedWork(await api('/work', token));
       clearWorkForm();
       setMessage(`事件已上傳。事件編號：${eventCode}`);
@@ -690,9 +639,9 @@ function App() {
     setBusy(true); setLocalDrafts(old => old.map(item => item.id === draft.id ? uploading : item));
     await saveLocalDraft(uploading).catch(() => {});
     try {
-      const queuedMedia: ChunkableMedia[] = draft.media.filter(file => file.blob).map(file => ({ blob:file.blob as Blob, name:file.name || file.originalName || 'attachment', mimeType:file.mimeType || file.blob?.type || 'application/octet-stream' }));
+      const queuedMedia = draft.media.filter(file => file.blob).map(file => ({ blob:file.blob as Blob, name:file.name || file.originalName || 'attachment', mimeType:file.mimeType || file.blob?.type || 'application/octet-stream' }));
       setUploadProgress({ loaded:0, total:queuedMedia.reduce((sum, file) => sum + file.blob.size, 0), percent:0, bytesPerSecond:0 });
-      await uploadWorkInChunks(token, { title:draft.title, content:draft.content, eventDate:draft.eventDate, eventCode:draft.eventCode, createdAt:draft.createdAt }, queuedMedia, setUploadProgress);
+      await uploadWorkAsMultipart(token, { title:draft.title, content:draft.content, eventDate:draft.eventDate, eventCode:draft.eventCode, createdAt:draft.createdAt }, queuedMedia, setUploadProgress);
       await deleteLocalDraft(draft.id); setLocalDrafts(old => old.filter(item => item.id !== draft.id));
       setUploadedWork(await api('/work', token)); setMessage(`事件 ${draft.eventCode} 及 ${draft.media.length} 個附件已上傳。`);
     } catch (err) {
@@ -826,7 +775,7 @@ function App() {
     {message && <p className="notice">{message}</p>}</section></main></>;
 
   return <div className="app-shell"><header className="topbar"><div className="mobile-brand-block"><div className="mobile-header-first-row"><div className="brand">事件管理系統</div><button className="secondary compact mobile-logout" onClick={logout}>登出</button><span className={`remote-status inline header-remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status" aria-label={remoteOnline ? '遠端已連線' : '遠端未連線'} title={remoteOnline ? '遠端已連線' : '遠端未連線'}><span className="remote-light" /></span></div><small className="mobile-header-meta"><span className="mobile-header-system"><span>v{displayedVersion}</span><span>{displayedEnvironment}</span>{user.role !== 'admin' && <span className="device-code-meta">設備碼 {deviceCode || '同步中'}</span>}</span><span className="mobile-username">{user.username}</span><span className="mobile-header-storage"><span className="storage-label">空間</span><button type="button" className={`storage-meter ${localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) >= 0.9 ? 'critical' : localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) >= 0.5 ? 'warning' : ''}`} aria-label={`本機暫存容量（估算）上限 ${formatStorageGB(localStorageInfo.quotaBytes)}；已使用 ${formatUsedStorage(localStorageInfo.usageBytes)} · 剩餘估算 ${formatStorageGB(Math.max(0, localStorageInfo.quotaBytes - localStorageInfo.usageBytes))}`} title={`本機暫存容量（估算）上限 ${formatStorageGB(localStorageInfo.quotaBytes)}；已使用 ${formatUsedStorage(localStorageInfo.usageBytes)} · 剩餘估算 ${formatStorageGB(Math.max(0, localStorageInfo.quotaBytes - localStorageInfo.usageBytes))}`} onClick={() => setShowStorageTooltip(value => !value)}><span className="storage-meter-fill" style={{ width: `${Math.max(0, Math.min(100, localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) * 100) * 0.9)}%` }} /></button>{showStorageTooltip && <span className="storage-tooltip" role="tooltip">本機暫存容量（估算）上限 {formatStorageGB(localStorageInfo.quotaBytes)}；已使用 {formatUsedStorage(localStorageInfo.usageBytes)} · 剩餘估算 {formatStorageGB(Math.max(0, localStorageInfo.quotaBytes - localStorageInfo.usageBytes))}</span>}</span></small></div><div className="account"><span>{user.displayName || user.username}</span>{user.role !== 'admin' && <span className="device-code">設備碼 {deviceCode || '同步中'}</span>}<button className="secondary compact" onClick={logout}>登出</button><span className={`remote-status inline account-remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端連線' : '遠端離線'}</span></div></header>
-    {uploadProgress && <div className="upload-progress global-upload-progress" role="status" aria-live="polite"><div className="upload-progress-heading"><strong>附件上傳中</strong><span>{uploadProgress.percent === null ? `${formatBytes(uploadProgress.loaded)} 已傳送` : `${uploadProgress.percent}%`}</span></div><progress max={100} value={uploadProgress.percent ?? 0} /><div className="upload-progress-details"><span>{formatBytes(uploadProgress.loaded)}{uploadProgress.total ? ` / ${formatBytes(uploadProgress.total)}` : ' 已傳送'}</span><span>目前速度約 {uploadProgress.bytesPerSecond > 0 ? formatSpeed(uploadProgress.bytesPerSecond) : '計算中…'}</span></div></div>}<nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'tab active' : 'tab'} onClick={() => { setTab(key); setMessage(''); }}>{label}</button>)}</nav>
+    {uploadProgress && <div className="upload-progress global-upload-progress" role="status" aria-live="polite"><div className="upload-progress-heading"><strong>附件上傳中</strong><span>{uploadProgress.percent === null ? `${formatBytes(uploadProgress.loaded)} 已傳送` : `${uploadProgress.percent}%`}</span></div><progress max={100} value={uploadProgress.percent ?? 0} /><div className="upload-progress-details"><span>{formatBytes(uploadProgress.loaded)}{uploadProgress.total ? ` / ${formatBytes(uploadProgress.total)}` : ' 已傳送'}</span><span>一般檔案上傳</span></div></div>}<nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'tab active' : 'tab'} onClick={() => { setTab(key); setMessage(''); }}>{label}</button>)}</nav>
     <main className="content">
       {message && <div className="notice" role="status">{message}<button className="notice-close" onClick={() => setMessage('')}>×</button></div>}
             {tab === 'print' && user.role !== 'admin' && <section className="grid two">

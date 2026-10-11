@@ -465,44 +465,93 @@ function App() {
     } catch (e) { setMessage(e instanceof Error ? e.message : '打印失敗'); } finally { setBusy(false); }
   }
 
+  async function createEventCode() {
+    const code = deviceCode || localStorage.getItem('esc-device-code') || '';
+    if (!code) throw new Error('此設備尚未取得後台派發的設備碼。請先在可連線時完成註冊或登入，再建立離線事件。');
+    return makeEventCode(await nextLocalEventSequence(), code, new Date());
+  }
+  function draftFromForm(eventCode: string, syncStatus: LocalDraft['syncStatus'] = 'draft'): LocalDraft {
+    return {
+      id: crypto.randomUUID(), title: workTitle.trim(), content: workContent.trim(), eventDate: workDate,
+      createdAt: new Date().toISOString(), eventCode, syncStatus,
+      media: workMedia.map(file => ({ name:file.name, originalName:file.name, kind:file.type.startsWith('video/') ? 'video' : 'image', mimeType:file.type, size:file.size, blob:file }))
+    };
+  }
+  function clearWorkForm() {
+    setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16)); setWorkMedia([]);
+  }
+  function isConnectivityFailure(error: unknown) {
+    const text = error instanceof Error ? error.message : String(error || '');
+    return /網絡連線中斷|Failed to fetch|NetworkError|Load failed|HTTP 5\\d\\d|連線逾時/i.test(text);
+  }
   async function uploadCurrentWork() {
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
     setBusy(true);
+    let eventCode = '';
     try {
-      const data = new FormData(); data.append('title', title); data.append('content', workContent.trim()); data.append('eventDate', workDate);
+      eventCode = await createEventCode();
+      if (!remoteOnline) {
+        const draft = draftFromForm(eventCode, 'queued');
+        await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
+        setMessage(`遠端未連線，事件 ${eventCode} 已加入本機上傳隊列，恢復連線後會自動重試。`);
+        return;
+      }
+      const data = new FormData(); data.append('title', title); data.append('content', workContent.trim()); data.append('eventDate', workDate); data.append('eventCode', eventCode);
       workMedia.forEach(file => data.append('media', file, file.name));
       setUploadProgress({ loaded:0, total:0, percent:0, bytesPerSecond:0 });
       await uploadFormDataWithProgress('/work', token, data, setUploadProgress);
       setUploadedWork(await api('/work', token));
-      setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16)); setWorkMedia([]);
-      setMessage('事件及附件已直接上傳系統。');
-    } catch (err) { setMessage(err instanceof Error ? err.message : '上傳事件失敗'); }
-    finally { setBusy(false); window.setTimeout(() => setUploadProgress(null), 1200); }
+      clearWorkForm();
+      setMessage(`事件已上傳。事件編號：${eventCode}`);
+    } catch (err) {
+      if (isConnectivityFailure(err) && eventCode && workTitle.trim()) {
+        try {
+          const draft = draftFromForm(eventCode, 'queued');
+          await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
+          setMessage(`遠端連線中斷，事件 ${eventCode} 已加入本機上傳隊列，稍後會自動重試。`);
+        } catch { setMessage('上傳失敗，而且無法保存至本機隊列。請勿關閉頁面，檢查裝置儲存空間後重試。'); }
+      } else setMessage(err instanceof Error ? err.message : '上傳事件失敗；表單內容仍保留，請重試。');
+    } finally { setBusy(false); window.setTimeout(() => setUploadProgress(null), 1200); }
   }
 
   async function saveLocalWork(e: React.FormEvent) {
     e.preventDefault(); const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
     setBusy(true);
     try {
-      const draft: LocalDraft = { id: crypto.randomUUID(), title, content: workContent.trim(), eventDate: workDate, createdAt: new Date().toISOString(), media: workMedia.map(file => ({ name:file.name, originalName:file.name, kind:file.type.startsWith('video/') ? 'video' : 'image', mimeType:file.type, size:file.size, blob:file })) };
-      await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]);
-      setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16)); setWorkMedia([]);
-      setMessage('事件及附件已暫存在手機，尚未上傳系統。');
-    } catch { setMessage('手機暫存失敗；可能是裝置儲存空間不足。請減少影片大小後再試。'); }
+      const draft = draftFromForm(await createEventCode());
+      await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
+      setMessage(`事件已暫存在手機。事件編號：${draft.eventCode}`);
+    } catch (err) { setMessage(err instanceof Error ? err.message : '手機暫存失敗；可能是裝置儲存空間不足。請減少影片大小後再試。'); }
     finally { setBusy(false); }
   }
 
   async function uploadLocalWork(draft: LocalDraft) {
-    setBusy(true);
+    if (remainingMs(draft.createdAt, Date.now()) <= 0) {
+      await deleteLocalDraft(draft.id).catch(() => {}); setLocalDrafts(old => old.filter(item => item.id !== draft.id));
+      setMessage('此事件已超過 24 小時，已從客戶端移除。'); return;
+    }
+    if (!remoteOnline) {
+      const queued = { ...draft, syncStatus:'queued' as const };
+      await saveLocalDraft(queued); setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));
+      setMessage(`遠端未連線，事件 ${draft.eventCode} 保留在本機上傳隊列。`); return;
+    }
+    const uploading = { ...draft, syncStatus:'uploading' as const };
+    setBusy(true); setLocalDrafts(old => old.map(item => item.id === draft.id ? uploading : item));
+    await saveLocalDraft(uploading).catch(() => {});
     try {
-      const data = new FormData(); data.append('title', draft.title); data.append('content', draft.content); data.append('eventDate', draft.eventDate);
+      const data = new FormData(); data.append('title', draft.title); data.append('content', draft.content); data.append('eventDate', draft.eventDate); data.append('eventCode', draft.eventCode);
       draft.media.forEach(file => { if (file.blob) data.append('media', file.blob, file.name || file.originalName || 'attachment'); });
       setUploadProgress({ loaded:0, total:0, percent:0, bytesPerSecond:0 });
       await uploadFormDataWithProgress('/work', token, data, setUploadProgress);
       await deleteLocalDraft(draft.id); setLocalDrafts(old => old.filter(item => item.id !== draft.id));
-      setUploadedWork(await api('/work', token)); setMessage(`事件及 ${draft.media.length} 個附件已上傳。`);
-    } catch (err) { setMessage(err instanceof Error ? err.message : '上傳事件失敗；手機暫存仍會保留，請重試。'); }
-    finally { setBusy(false); window.setTimeout(() => setUploadProgress(null), 1200); }
+      setUploadedWork(await api('/work', token)); setMessage(`事件 ${draft.eventCode} 及 ${draft.media.length} 個附件已上傳。`);
+    } catch (err) {
+      const status = isConnectivityFailure(err) ? 'queued' as const : 'failed' as const;
+      const retained = { ...draft, syncStatus:status };
+      await saveLocalDraft(retained).catch(() => {});
+      setLocalDrafts(old => old.map(item => item.id === draft.id ? retained : item));
+      setMessage(status === 'queued' ? `事件 ${draft.eventCode} 上傳中斷，已保留在隊列，稍後自動重試。` : (err instanceof Error ? err.message : '上傳失敗；本機事件仍保留，可手動重試。'));
+    } finally { setBusy(false); window.setTimeout(() => setUploadProgress(null), 1200); }
   }
   async function deleteLocalWork(draftId: string) {
     if (!window.confirm('確定刪除此手機暫存事件？')) return;

@@ -1,7 +1,7 @@
 {
-  "name": "PWA ESC Printing",
-  "short_name": "ESC Printing",
-  "description": "BLE thermal printer, receipts, event records and audit history",
+  "name": "事件管理系統",
+  "short_name": "事件管理",
+  "description": "事件記錄、附件管理、工作記錄及操作稽核",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f3f4f6",

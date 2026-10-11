@@ -176,11 +176,13 @@ app.post('/api/auth/login/options', async (req, res) => {
 app.post('/api/auth/login/verify', async (req, res) => {
   const { username, challengeId, response } = req.body;
   const expectedChallenge = takeChallenge(challengeId, 'login');
+  let user: any = null;
+  let stored: any = null;
   try {
     if (!expectedChallenge || !response?.id) throw new Error('Challenge expired or invalid');
-    const stored = db.prepare('SELECT * FROM passkeys WHERE credential_id=?').get(response.id) as any;
+    stored = db.prepare('SELECT * FROM passkeys WHERE credential_id=?').get(response.id) as any;
     if (!stored) throw new Error('Passkey not registered');
-    const user = db.prepare('SELECT * FROM users WHERE id=?').get(stored.user_id) as any;
+    user = db.prepare('SELECT * FROM users WHERE id=?').get(stored.user_id) as any;
     if (!user || (username && user.username !== String(username).toLowerCase())) throw new Error('Passkey does not match this account');
     const credential: WebAuthnCredential = { id: stored.credential_id, publicKey: Buffer.from(stored.public_key, 'base64url'), counter: stored.counter, transports: stored.transports ? JSON.parse(stored.transports) : [] } as any;
     const verification = await verifyAuthenticationResponse({ response: response as AuthenticationResponseJSON, expectedChallenge, expectedOrigin: origin, expectedRPID: rpID, credential });

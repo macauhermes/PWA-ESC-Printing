@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS client_devices (
   client_id TEXT PRIMARY KEY, device_code TEXT NOT NULL UNIQUE,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS user_devices (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  client_id TEXT NOT NULL REFERENCES client_devices(client_id) ON DELETE CASCADE,
+  registered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id, client_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_devices_client ON user_devices(client_id, registered_at DESC);
 CREATE TABLE IF NOT EXISTS client_work (
   id TEXT PRIMARY KEY, client_id TEXT NOT NULL, user_id TEXT NOT NULL, username TEXT NOT NULL,
   title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', event_date TEXT, printer_name TEXT,

@@ -410,7 +410,7 @@ function resolveMediaMimeType(originalName:string, suppliedMimeType:string) {
   const ext = path.extname(originalName).toLowerCase();
   return MEDIA_MIME_BY_EXTENSION[ext] || '';
 }
-const upload = multer({ storage, limits: { fileSize: 250 * 1024 * 1024, files: 20 }, fileFilter: (_req, file, cb) => {
+const upload = multer({ storage, limits: { fileSize: 500 * 1024 * 1024, files: 20 }, fileFilter: (_req, file, cb) => {
   const resolved = resolveMediaMimeType(file.originalname,file.mimetype);
   if (!resolved) return cb(new Error(`不支援的附件格式：${file.originalname}。請選擇常見圖片或影片格式。`));
   (file as any).mimetype = resolved;
@@ -445,7 +445,7 @@ app.post('/api/work/chunk', auth, chunkUpload.single('chunk'), (req: any, res) =
   const totalChunks = Number(req.body.totalChunks);
   const totalSize = Number(req.body.totalSize);
   const chunkSize = Number(req.body.chunkSize);
-  if (!/^[0-9a-f-]{36}$/i.test(uploadId) || !req.file || !Number.isInteger(index) || !Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 1600 || index < 0 || index >= totalChunks || !Number.isInteger(totalSize) || totalSize < 1 || totalSize > 250 * 1024 * 1024 || chunkSize !== 160 * 1024 || !/^(image|video)\//i.test(mimeType)) {
+  if (!/^[0-9a-f-]{36}$/i.test(uploadId) || !req.file || !Number.isInteger(index) || !Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 3200 || index < 0 || index >= totalChunks || !Number.isInteger(totalSize) || totalSize < 1 || totalSize > 500 * 1024 * 1024 || chunkSize !== 160 * 1024 || !/^(image|video)\//i.test(mimeType)) {
     return res.status(400).json({ error: '附件分段資料無效，請重新選擇影片或圖片後重試。' });
   }
   const tempPath = path.join(chunkDir, uploadId + '.part');
@@ -714,7 +714,7 @@ app.use((err: any, _req: any, res: any, _next: any) => {
   if (res.headersSent) return;
   if (err instanceof multer.MulterError) {
     const tooLarge = err.code === 'LIMIT_FILE_SIZE';
-    return res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? '附件超過伺服器允許的 250 MiB 上限。' : `附件上傳限制：${err.message}` });
+    return res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? '附件超過伺服器允許的 500 MiB 上限。' : `附件上傳限制：${err.message}` });
   }
   if (err instanceof Error && err.message.startsWith('不支援的附件格式：')) return res.status(415).json({ error: err.message });
   res.status(500).json({ error: '伺服器發生內部錯誤，請查看伺服器日誌。' });

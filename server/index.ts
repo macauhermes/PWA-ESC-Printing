@@ -441,6 +441,20 @@ app.delete('/api/admin/device-work/:id', auth, requireAdmin, (req: any, res) => 
   res.json({ ok:true, id:workId, mediaCount });
 });
 
+app.get('/api/admin/notifications', auth, requireAdmin, (req: any, res) => {
+  const rows = db.prepare(`SELECT n.id,n.title,n.body,n.target_client_id AS targetClientId,n.created_at AS createdAt,
+    cs.username AS targetUsername,cd.device_code AS deviceCode,
+    CAST(json_extract(a.detail,'$.pushSent') AS INTEGER) AS pushSent,
+    CAST(json_extract(a.detail,'$.pushTotal') AS INTEGER) AS pushTotal,
+    CAST(json_extract(a.detail,'$.pushConfigured') AS INTEGER) AS pushConfigured
+    FROM notifications n
+    LEFT JOIN client_status cs ON cs.client_id=n.target_client_id
+    LEFT JOIN client_devices cd ON cd.client_id=n.target_client_id
+    LEFT JOIN audit_log a ON a.entity_type='notification' AND a.entity_id=n.id AND a.action='admin.notification_sent'
+    ORDER BY n.created_at DESC,n.rowid DESC`).all();
+  res.json(rows);
+});
+
 app.post('/api/admin/notifications', auth, requireAdmin, async (req: any, res) => {
   const title = String(req.body.title || '').trim().slice(0, 200);
   const body = String(req.body.body || '').trim().slice(0, 5000);

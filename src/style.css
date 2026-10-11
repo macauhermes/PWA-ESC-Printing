@@ -316,3 +316,7 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 .notification-list-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
 @media(max-width:800px){.notification-list-actions{align-items:flex-end;flex-direction:column;gap:8px}.notification-list-actions button{max-width:100%}}
+
+/* Desktop header version; mobile already shows it in the metadata row. */
+.desktop-system-version{display:block;color:#9ca3af;font-size:12px;line-height:1.4;margin-top:5px}
+@media(max-width:600px){.desktop-system-version{display:none}}

@@ -271,7 +271,7 @@ app.post('/api/client/heartbeat', auth, (req: any, res) => {
   if (req.user.client_id && req.user.client_id !== clientId) return res.status(403).json({ error: 'Client session mismatch' });
   if (!req.user.client_id) db.prepare('UPDATE sessions SET client_id=? WHERE token_hash=?').run(clientId, req.user.token_hash);
   const body = req.body || {};
-  db.prepare('INSERT INTO user_devices(user_id,client_id) VALUES(?,?) ON CONFLICT(user_id,client_id) DO UPDATE SET last_seen=CURRENT_TIMESTAMP').run(req.user.id, clientId);
+  if (req.user.role !== 'admin') db.prepare('INSERT INTO user_devices(user_id,client_id) VALUES(?,?) ON CONFLICT(user_id,client_id) DO UPDATE SET last_seen=CURRENT_TIMESTAMP').run(req.user.id, clientId);
   db.prepare(`INSERT INTO client_status(client_id,user_id,username,online,bluetooth_supported,bluetooth_connected,printer_connected,printer_name,printer_id,user_agent,app_version,app_environment,last_seen)
     VALUES(?,?,?,1,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
     ON CONFLICT(client_id) DO UPDATE SET user_id=excluded.user_id,username=excluded.username,online=1,
@@ -382,8 +382,6 @@ app.delete('/api/admin/devices/:clientId', auth, requireAdmin, (req: any, res) =
   if (linkedUsers.some(item => item.role === 'admin' || (adminUsername && item.username === adminUsername))) return res.status(400).json({ error: '此設備關聯管理員帳戶，為避免鎖定管理系統，不能整台刪除。' });
   const removeDevice = db.transaction(() => {
     audit(req.user, 'admin.registration_device_deleted', 'client_device', clientId, { deviceCode: device.deviceCode, deletedUsers: linkedUsers.map(item => item.username) });
-    const media = db.prepare(`SELECT wm.filename FROM work_media wm JOIN client_work cw ON cw.id=wm.work_id WHERE cw.client_id=?`).all(clientId) as { filename:string }[];
-    for (const item of media) { try { fs.unlinkSync(path.join(uploadDir, item.filename)); } catch {} }
     db.prepare('DELETE FROM client_work WHERE client_id=?').run(clientId);
     db.prepare('DELETE FROM push_subscriptions WHERE client_id=?').run(clientId);
     db.prepare('DELETE FROM notification_reads WHERE client_id=?').run(clientId);
@@ -397,7 +395,9 @@ app.delete('/api/admin/devices/:clientId', auth, requireAdmin, (req: any, res) =
     db.prepare('DELETE FROM client_status WHERE client_id=?').run(clientId);
     db.prepare('DELETE FROM client_devices WHERE client_id=?').run(clientId);
   });
+  const media = db.prepare(`SELECT wm.filename FROM work_media wm JOIN client_work cw ON cw.id=wm.work_id WHERE cw.client_id=?`).all(clientId) as { filename:string }[];
   try { removeDevice(); } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : '刪除設備失敗。' }); }
+  for (const item of media) { try { fs.unlinkSync(path.join(uploadDir, item.filename)); } catch {} }
   res.json({ ok: true, deletedUsers: linkedUsers.length, deviceCode: device.deviceCode });
 });
 app.post('/api/admin/clients/:clientId/logout', auth, requireAdmin, (req: any, res) => {

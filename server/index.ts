@@ -61,7 +61,7 @@ const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const audit = (user: any, action: string, type?: string, entityId?: string, detail?: unknown) =>
   db.prepare('INSERT INTO audit_log(user_id,username,action,entity_type,entity_id,detail) VALUES(?,?,?,?,?,?)')
     .run(user?.id || null, user?.username || null, action, type || null, entityId || null, detail ? JSON.stringify(detail) : null);
-const publicUser = (u: any) => ({ id: u.id, username: u.username, displayName: u.display_name, role: u.role });
+const publicUser = (u: any) => ({ id: u.id, username: u.username, displayName: u.username, role: u.role });
 const auth = (req: any, res: any, next: any) => {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'Authentication required' });
@@ -102,11 +102,20 @@ app.get('/api/config', (_req, res) => res.json({ rpName, rpID, origin, vapidPubl
 app.post('/api/auth/register/options', async (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   if (adminUsername && username === adminUsername) return res.status(403).json({ error: 'This username is reserved for administrator password login' });
-  const displayName = String(req.body.displayName || username).trim();
-  if (!/^[a-z0-9._-]{3,40}$/.test(username)) return res.status(400).json({ error: 'Username must be 3-40 characters: a-z, 0-9, dot, underscore or hyphen' });
-  let user = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
-  if (!user) { user = { id: id(), username, display_name: displayName, role: 'user' }; db.prepare('INSERT INTO users(id,username,display_name,role) VALUES(?,?,?,?)').run(user.id, username, displayName, user.role); }
-  if (user.role === 'admin') return res.status(403).json({ error: 'Administrator accounts cannot register a passkey' });
+  const employeeNumber = String(req.body.employeeNumber ?? '');
+  const employeeName = String(req.body.employeeName || '').trim();
+  const contactPhone = String(req.body.contactPhone || '').trim();
+  const contactEmail = String(req.body.contactEmail || '').trim();
+  if (!/^[a-z0-9._-]{3,40}$/.test(username)) return res.status(400).json({ error: '帳號必須為 3-40 個字元，只可使用 a-z、0-9、點、底線或連字號。' });
+  if (!/^[0-9]+$/.test(employeeNumber)) return res.status(400).json({ error: '員工編號必須填寫，而且只允許 0-9 數字。' });
+  if (!employeeName) return res.status(400).json({ error: '請填寫名稱。' });
+  const existingUser = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
+  if (existingUser) return res.status(409).json({ error: '此帳號已存在，請直接登入。' });
+  const existingEmployee = db.prepare('SELECT username FROM users WHERE employee_number=?').get(employeeNumber) as any;
+  if (existingEmployee) return res.status(409).json({ error: '此員工編號已註冊，請聯絡管理員。' });
+  const user = { id: id(), username, display_name: username, role: 'user' };
+  db.prepare('INSERT INTO users(id,username,display_name,employee_number,employee_name,contact_phone,contact_email,role) VALUES(?,?,?,?,?,?,?,?)')
+    .run(user.id, username, username, employeeNumber, employeeName, contactPhone || null, contactEmail || null, user.role);
   const existing = db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[];
   if (existing.length > 0) return res.status(409).json({ error: 'This username already has a passkey. Ask an administrator to add another authenticator.' });
   const options = await awaitRegistrationOptions(user, existing);

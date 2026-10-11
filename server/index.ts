@@ -182,6 +182,7 @@ app.post('/api/auth/login/verify', async (req, res) => {
     if (!stored) throw new Error('Passkey not registered');
     const user = db.prepare('SELECT * FROM users WHERE id=?').get(stored.user_id) as any;
     if (!user || (username && user.username !== String(username).toLowerCase())) throw new Error('Passkey does not match this account');
+    const credential: WebAuthnCredential = { id: stored.credential_id, publicKey: Buffer.from(stored.public_key, 'base64url'), counter: stored.counter, transports: stored.transports ? JSON.parse(stored.transports) : [] } as any;
     const verification = await verifyAuthenticationResponse({ response: response as AuthenticationResponseJSON, expectedChallenge, expectedOrigin: origin, expectedRPID: rpID, credential });
     if (!verification.verified) throw new Error('Passkey verification failed');
     db.prepare('UPDATE passkeys SET counter=? WHERE credential_id=?').run(verification.authenticationInfo.newCounter, stored.credential_id);

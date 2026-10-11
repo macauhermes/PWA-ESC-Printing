@@ -20,7 +20,7 @@ type ProfileForm = { employeeNumber:string; employeeName:string; contactPhone:st
 type AdminOperation = { id:number; username?:string; action:string; entity_type?:string; entity_id?:string; detail?:string; created_at:string };
 type WorkMedia = { id?:string; kind:string; originalName:string; mimeType:string; url?:string; name?:string; size?:number; blob?:Blob };
 type DeviceWork = { id:string; clientId:string; userId:string; username:string; title:string; content:string; eventDate?:string|null; createdAt:string; printerName?:string|null; eventCode?:string|null; media?:WorkMedia[] };
-type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string; eventCode:string; syncStatus?:'draft'|'queued'|'uploading'|'failed'|'cancelled'; media:WorkMedia[] };
+type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string; eventCode:string; uploadDispatchSeq?:number; syncStatus?:'draft'|'queued'|'uploading'|'failed'|'cancelled'; media:WorkMedia[] };
 type MediaViewer = { src:string; kind:'image'|'video'; name:string; revokeOnClose:boolean; recordCreatedAt?:string };
 type UploadProgress = { loaded:number; total:number; percent:number|null; bytesPerSecond:number };
 type AttachmentUploadStatus = 'pending'|'uploading'|'uploaded'|'failed';
@@ -153,6 +153,25 @@ async function nextLocalEventSequence(): Promise<number> {
     const request = store.get('event-sequence');
     let next = 1;
     request.onsuccess = () => { next = Number(request.result?.value || 0) + 1; store.put({ id:'event-sequence', value:next }); };
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve(next);
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+  return value;
+}
+
+// A dispatch sequence records when the user put an event into the upload queue.
+// It is intentionally independent of the event code; resuming a cancelled event
+// assigns a fresh sequence so it joins the back of the current queue.
+async function nextUploadDispatchSequence(): Promise<number> {
+  const db = await printerStore();
+  const value = await new Promise<number>((resolve, reject) => {
+    const tx = db.transaction('preferences', 'readwrite');
+    const store = tx.objectStore('preferences');
+    const request = store.get('upload-dispatch-sequence');
+    let next = 1;
+    request.onsuccess = () => { next = Number(request.result?.value || 0) + 1; store.put({ id:'upload-dispatch-sequence', value:next }); };
     request.onerror = () => reject(request.error);
     tx.oncomplete = () => resolve(next);
     tx.onerror = () => reject(tx.error);
@@ -399,7 +418,7 @@ function App() {
     }).catch(() => {});
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, [token, user]);
-  useEffect(() => { loadLocalDrafts().then(drafts => { const normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); localDraftsRef.current = normalized; setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index]).map(draft => saveLocalDraft(draft).catch(() => {}))); window.setTimeout(() => startNextQueuedUpload(), 0); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, []);
+  useEffect(() => { loadLocalDrafts().then(async drafts => { let normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); const missing = normalized.filter(draft => draft.syncStatus === 'queued' && !(Number(draft.uploadDispatchSeq) > 0)).sort((a,b) => a.createdAt.localeCompare(b.createdAt)); for (const draft of missing) { draft.uploadDispatchSeq = await nextUploadDispatchSequence(); } localDraftsRef.current = normalized; setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index] || missing.includes(draft)).map(draft => saveLocalDraft(draft).catch(() => {}))); window.setTimeout(() => startNextQueuedUpload(), 0); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, []);
   useEffect(() => {
     let active = true;
     const refreshStorageInfo = async () => {
@@ -728,18 +747,22 @@ function App() {
     setMessage(`已移除附件：${removed?.name || '附件'}`);
   }
 
-  function eventSequenceNumber(draft: LocalDraft) {
-    const prefix = Number((draft.eventCode || '').split('-')[0]);
-    return Number.isFinite(prefix) && prefix > 0 ? prefix : Number.MAX_SAFE_INTEGER;
+  function uploadDispatchSequence(draft: LocalDraft) {
+    return Number(draft.uploadDispatchSeq) > 0 ? Number(draft.uploadDispatchSeq) : Number.MAX_SAFE_INTEGER;
   }
   function startNextQueuedUpload() {
-    // Do not use the health/version indicator as an upload gate: those probes can fail
-    // while the authenticated work API is reachable. Let the actual request decide.
+    // Claim the queue item and install its AbortController synchronously, before any
+    // async work starts. This closes the race where cancel was clicked while the
+    // scheduler was still awaiting event-code creation and the upload kept running.
     if (!token || !user || uploadingLocalWorkIds.current.size > 0) return;
     const next = localDraftsRef.current
       .filter(draft => draft.syncStatus === 'queued' && remainingMs(draft.createdAt, Date.now()) > 0)
-      .sort((a,b) => eventSequenceNumber(a) - eventSequenceNumber(b) || a.createdAt.localeCompare(b.createdAt))[0];
-    if (next) void uploadLocalWork(next);
+      .sort((a,b) => uploadDispatchSequence(a) - uploadDispatchSequence(b) || a.createdAt.localeCompare(b.createdAt))[0];
+    if (!next) return;
+    const controller = new AbortController();
+    uploadingLocalWorkIds.current.add(next.id);
+    uploadControllers.current.set(next.id, controller);
+    void uploadLocalWork(next, controller);
   }
   async function cancelLocalWork(draft: LocalDraft) {
     if (draft.syncStatus === 'uploading' || uploadControllers.current.has(draft.id) || uploadingLocalWorkIds.current.has(draft.id)) {
@@ -756,54 +779,59 @@ function App() {
     } catch (err) { setMessage(err instanceof Error ? err.message : '保存取消狀態失敗，請重試。'); }
   }
   async function continueLocalWork(draft: LocalDraft) {
-    const queued = { ...draft, syncStatus:'queued' as const };
+    const queued = { ...draft, uploadDispatchSeq: await nextUploadDispatchSequence(), syncStatus:'queued' as const };
     try {
       await saveLocalDraft(queued);
       localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? queued : item);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));
-      setMessage(`事件 ${draft.eventCode} 已放回上傳排程，將依最小事件編號順序處理。`);
+      setMessage(`事件 ${draft.eventCode} 已重新加入上傳隊列（派發序號 ${queued.uploadDispatchSeq}），將按新的派發序號排程。`);
       window.setTimeout(() => startNextQueuedUpload(), 0);
     } catch (err) { setMessage(err instanceof Error ? err.message : '無法恢復上傳排程；本機事件仍保留。'); }
   }
-  async function uploadLocalWork(draft: LocalDraft) {
-    if (!draft.eventCode) {
-      try {
-        draft = { ...draft, eventCode: await createEventCode(), syncStatus: draft.syncStatus || 'draft' };
-        await saveLocalDraft(draft);
-        setLocalDrafts(old => old.map(item => item.id === draft.id ? draft : item));
-      } catch (err) { setMessage(err instanceof Error ? err.message : '無法為舊暫存記錄補發事件編號。'); return; }
-    }
-    if (draft.syncStatus !== 'queued' || !token || !user || uploadingLocalWorkIds.current.size > 0 || uploadingLocalWorkIds.current.has(draft.id)) return;
-    const smallestQueued = localDraftsRef.current
-      .filter(item => item.syncStatus === 'queued' && remainingMs(item.createdAt, Date.now()) > 0)
-      .sort((a,b) => eventSequenceNumber(a) - eventSequenceNumber(b) || a.createdAt.localeCompare(b.createdAt))[0];
-    if (smallestQueued && smallestQueued.id !== draft.id) return;
-    if (remainingMs(draft.createdAt, Date.now()) <= 0) {
-      await deleteLocalDraft(draft.id).catch(() => {}); setLocalDrafts(old => old.filter(item => item.id !== draft.id));
-      setMessage('此事件已超過 24 小時，已從客戶端移除。'); return;
-    }
-    uploadingLocalWorkIds.current.add(draft.id);
-    const controller = new AbortController();
-    uploadControllers.current.set(draft.id,controller);
-    const uploading = { ...draft, syncStatus:'uploading' as const };
-    setLocalDrafts(old => old.map(item => item.id === draft.id ? uploading : item));
-    await saveLocalDraft(uploading).catch(() => {});
+  async function uploadLocalWork(draft: LocalDraft, controller: AbortController) {
     let finalStatus: LocalDraft['syncStatus'] = 'uploading';
     try {
+      if (draft.syncStatus !== 'queued' || !token || !user) return;
+      const smallestQueued = localDraftsRef.current
+        .filter(item => item.syncStatus === 'queued' && remainingMs(item.createdAt, Date.now()) > 0)
+        .sort((a,b) => uploadDispatchSequence(a) - uploadDispatchSequence(b) || a.createdAt.localeCompare(b.createdAt))[0];
+      if (smallestQueued && smallestQueued.id !== draft.id) return;
+      if (remainingMs(draft.createdAt, Date.now()) <= 0) {
+        await deleteLocalDraft(draft.id).catch(() => {});
+        setLocalDrafts(old => old.filter(item => item.id !== draft.id));
+        setMessage('此事件已超過 24 小時，已從客戶端移除。');
+        finalStatus = undefined;
+        return;
+      }
+      if (!draft.eventCode) {
+        draft = { ...draft, eventCode: await createEventCode() };
+        if (controller.signal.aborted) throw new Error('上傳已取消。');
+        await saveLocalDraft(draft);
+        localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? draft : item);
+        setLocalDrafts(old => old.map(item => item.id === draft.id ? draft : item));
+      }
+      if (controller.signal.aborted) throw new Error('上傳已取消。');
+      const uploading = { ...draft, syncStatus:'uploading' as const };
+      localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? uploading : item);
+      setLocalDrafts(old => old.map(item => item.id === draft.id ? uploading : item));
+      await saveLocalDraft(uploading);
       const queuedMedia:WorkUploadMedia[] = draft.media.map((file,index)=>({file,index})).filter(item=>item.file.blob).map(({file,index})=>({blob:file.blob as Blob,name:file.name || file.originalName || 'attachment',mimeType:mediaMimeType(file.name || file.originalName || 'attachment',file.mimeType || file.blob?.type || ''),key:draftAttachmentKey(draft.id,index,file)}));
       setAttachmentUploadStatuses(old=>({...old,...Object.fromEntries(queuedMedia.map(file=>[file.key,'pending' as AttachmentUploadStatus]))}));
       setUploadProgress({ loaded:0, total:queuedMedia.reduce((sum,file)=>sum+file.blob.size,0), percent:0, bytesPerSecond:0 });
       await uploadWorkInChunks(token,{title:draft.title,content:draft.content,eventDate:draft.eventDate,eventCode:draft.eventCode,createdAt:draft.createdAt},queuedMedia,setUploadProgress,(key,status)=>setAttachmentUploadStatuses(old=>({...old,[key]:status})),(key,percent)=>setAttachmentUploadPercents(old=>({...old,[key]:percent})),controller.signal);
-      await deleteLocalDraft(draft.id); finalStatus = undefined;
+      await deleteLocalDraft(draft.id);
+      localDraftsRef.current = localDraftsRef.current.filter(item => item.id !== draft.id);
       setLocalDrafts(old => old.filter(item => item.id !== draft.id));
+      finalStatus = undefined;
       setUploadedWork(await api('/work', token)); setMessage(`事件 ${draft.eventCode} 及 ${draft.media.length} 個附件已上傳。`);
     } catch (err) {
       const status = controller.signal.aborted ? 'cancelled' as const : isConnectivityFailure(err) ? 'queued' as const : 'failed' as const;
       finalStatus = status;
       const retained = { ...draft, syncStatus:status };
       await saveLocalDraft(retained).catch(() => {});
+      localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? retained : item);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? retained : item));
-      if (status === 'cancelled') setMessage(`事件 ${draft.eventCode} 已取消上傳；可選擇「繼續上傳」或「轉為暫存」。`);
+      if (status === 'cancelled') setMessage(`事件 ${draft.eventCode || '（待補編號）'} 已取消上傳；可選擇「繼續上傳」或「轉為暫存」。`);
       else setMessage(status === 'queued' ? `事件 ${draft.eventCode} 上傳中斷，已保留在上傳隊列，稍後自動重試。` : (err instanceof Error ? err.message : '上傳失敗；本機事件仍保留，可手動繼續上傳。'));
     } finally {
       uploadingLocalWorkIds.current.delete(draft.id);
@@ -821,12 +849,12 @@ function App() {
       setMessage('此暫存事件沒有標題，請先編輯或重新建立事件。');
       return;
     }
-    const queued: LocalDraft = { ...draft, syncStatus:'queued' };
+    const queued: LocalDraft = { ...draft, uploadDispatchSeq: await nextUploadDispatchSequence(), syncStatus:'queued' };
     try {
       await saveLocalDraft(queued);
       localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? queued : item);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));
-      setMessage(`事件 ${draft.eventCode || '（待補編號）'} 已加入上傳隊列，將依事件編號順序上傳。`);
+      setMessage(`事件 ${draft.eventCode || '（待補編號）'} 已加入上傳隊列（派發序號 ${queued.uploadDispatchSeq}），將依加入隊列順序上傳。`);
       window.setTimeout(() => startNextQueuedUpload(), 0);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '無法將手機暫存事件加入上傳隊列；原暫存仍保留。');
@@ -860,6 +888,31 @@ function App() {
       setLocalDrafts(old => old.map(item => item.id === draft.id ? localDraft : item));
       setMessage(`事件 ${draft.eventCode} 已移至「手機暫存事件」，不會再自動排程上傳。`);
     } catch (err) { setMessage(err instanceof Error ? err.message : '轉為手機暫存失敗；事件仍保留在上傳隊列。'); }
+  }
+
+  async function forceCleanupLocalRecords() {
+    const removable = localDraftsRef.current.filter(draft =>
+      (!draft.syncStatus || draft.syncStatus === 'draft' || draft.syncStatus === 'cancelled') &&
+      !uploadingLocalWorkIds.current.has(draft.id) &&
+      !uploadControllers.current.has(draft.id)
+    );
+    if (!removable.length) {
+      setMessage('沒有可強制清理的手機暫存或已取消上傳記錄；排程中、上傳中及失敗記錄均會保留。');
+      return;
+    }
+    if (!window.confirm(`強制清理 ${removable.length} 筆手機暫存／已取消上傳事件及其本機附件？此操作無法復原；不會刪除後台已上傳事件，也不會清除仍在排程、上傳中或失敗的事件。`)) return;
+    try {
+      for (const draft of removable) await deleteLocalDraft(draft.id);
+      const removedIds = new Set(removable.map(draft => draft.id));
+      localDraftsRef.current = localDraftsRef.current.filter(draft => !removedIds.has(draft.id));
+      setLocalDrafts(old => old.filter(draft => !removedIds.has(draft.id)));
+      setMessage(`已強制清理 ${removable.length} 筆手機暫存／已取消上傳記錄及其附件。`);
+    } catch (err) {
+      const remaining = await loadLocalDrafts().catch(() => localDraftsRef.current);
+      localDraftsRef.current = remaining;
+      setLocalDrafts(remaining);
+      setMessage(err instanceof Error ? err.message : '強制清理未能完全完成；已重新讀取本機記錄，請再次檢查。');
+    }
   }
 
   async function saveEvent(e: React.FormEvent) {
@@ -1052,11 +1105,11 @@ function App() {
           {workMedia.map((file,i)=>{const key=formAttachmentKey(file,i);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={key}><div className="attachment-row"><span className="attachment-name">{file.type.startsWith('video/') || /\.(mov|mp4|m4v|3gp|3g2|webm|mkv|avi|mts|m2ts)$/i.test(file.name)?'影片':'圖片'}：{file.name}（{(file.size/1024/1024).toFixed(1)} MB）</span><button type="button" className="attachment-remove-button" disabled={workSubmitting} aria-label={`移除附件 ${file.name}`} onClick={()=>removeSelectedAttachment(i)}>移除</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}<div className="actions"><button type="submit" disabled={workSubmitting || !workTitle.trim()}>暫存於手機</button><button type="button" disabled={workSubmitting || !workTitle.trim()} onClick={()=>void uploadCurrentWork()}>上傳至後台</button></div></form>
           <p className="hint">手機暫存只保存在目前瀏覽器／裝置；清除網站資料或更換裝置可能導致暫存遺失。暫存內容不會出現在後台，直到按下「上傳系統」。</p>
         </article>
-        <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div></div>
+        <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div><button type="button" className="danger compact" onClick={()=>void forceCleanupLocalRecords()}>強制清理暫存及已取消記錄</button></div>
           {!localDrafts.some(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">尚無 24 小時內的已暫存事件。</p> : localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · 尚未上傳</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions"><button disabled={busy} onClick={()=>void enqueueLocalDraftForUpload(draft)}>上傳至後台</button><button className="danger compact" disabled={busy} onClick={()=>void deleteLocalWork(draft.id)}>刪除暫存</button></div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(draft.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div></div>)}
         </article>
         <article className="panel"><div className="admin-heading"><div><h2>上傳隊列</h2><p className="muted">中斷或等待重試：{localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div></div>
-          {!localDrafts.some(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">目前沒有排程中的事件。</p> : localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · {draft.syncStatus === 'queued' ? '已排程，依事件編號順序等待上傳' : draft.syncStatus === 'uploading' ? '正在上傳；可取消本次上傳' : draft.syncStatus === 'cancelled' ? '已取消上傳' : '上次上傳失敗，等待手動重新排程'}</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions queue-actions">
+          {!localDrafts.some(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">目前沒有排程中的事件。</p> : localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · {draft.syncStatus === 'queued' ? `已排程 · 派發序號 ${draft.uploadDispatchSeq ?? '—'}，按加入隊列順序等待上傳` : draft.syncStatus === 'uploading' ? `正在上傳 · 派發序號 ${draft.uploadDispatchSeq ?? '—'}；可取消本次上傳` : draft.syncStatus === 'cancelled' ? '已取消上傳' : '上次上傳失敗，等待手動重新排程'}</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions queue-actions">
               {draft.syncStatus === 'queued' || draft.syncStatus === 'uploading'
                 ? <button className="secondary compact" onClick={()=>void cancelLocalWork(draft)}>取消上傳</button>
                 : draft.syncStatus === 'cancelled' || draft.syncStatus === 'failed'

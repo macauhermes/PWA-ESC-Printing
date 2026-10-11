@@ -301,3 +301,15 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 /* Clickable links between user and registered-device detail pages */
 .text-link{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;color:#1d4ed8;padding:2px 0;margin:0;text-align:left;text-decoration:underline;text-underline-offset:3px;cursor:pointer;font:inherit;overflow-wrap:anywhere}.text-link:hover{color:#1e40af}.text-link:focus-visible{outline:2px solid #2563eb;outline-offset:3px;border-radius:3px}
+
+/* Individual notification cards; keep the read control at the top-right on mobile. */
+.notification-card{padding:14px;margin:12px 0;border:1px solid #e2e8f0;border-radius:12px;background:#fff;box-shadow:0 2px 7px rgba(15,23,42,.04)}
+.notification-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.notification-title{display:flex;flex:1;min-width:0;flex-direction:column;gap:5px}
+.notification-title strong{overflow-wrap:anywhere}
+.notification-title small{color:#6b7280;font-size:12px}
+.notification-read{flex-shrink:0;display:flex;align-items:flex-start;justify-content:flex-end}
+.notification-read .status{white-space:nowrap}
+.notification-read button{white-space:nowrap}
+.notification-body{margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.notification-footer{padding-top:9px;border-top:1px solid #edf0f5;font-size:12px}

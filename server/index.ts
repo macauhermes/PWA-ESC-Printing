@@ -253,15 +253,16 @@ app.post('/api/client/heartbeat', auth, (req: any, res) => {
   if (req.user.client_id && req.user.client_id !== clientId) return res.status(403).json({ error: 'Client session mismatch' });
   if (!req.user.client_id) db.prepare('UPDATE sessions SET client_id=? WHERE token_hash=?').run(clientId, req.user.token_hash);
   const body = req.body || {};
-  db.prepare(`INSERT INTO client_status(client_id,user_id,username,online,bluetooth_supported,bluetooth_connected,printer_connected,printer_name,printer_id,user_agent,last_seen)
-    VALUES(?,?,?,1,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+  db.prepare(`INSERT INTO client_status(client_id,user_id,username,online,bluetooth_supported,bluetooth_connected,printer_connected,printer_name,printer_id,user_agent,app_version,app_environment,last_seen)
+    VALUES(?,?,?,1,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
     ON CONFLICT(client_id) DO UPDATE SET user_id=excluded.user_id,username=excluded.username,online=1,
     bluetooth_supported=excluded.bluetooth_supported,bluetooth_connected=excluded.bluetooth_connected,
     printer_connected=excluded.printer_connected,printer_name=excluded.printer_name,printer_id=excluded.printer_id,
-    user_agent=excluded.user_agent,last_seen=CURRENT_TIMESTAMP`)
+    user_agent=excluded.user_agent,app_version=excluded.app_version,app_environment=excluded.app_environment,last_seen=CURRENT_TIMESTAMP`)
     .run(clientId, req.user.id, req.user.username, body.bluetoothSupported ? 1 : 0, body.bluetoothConnected ? 1 : 0,
       body.printerConnected ? 1 : 0, String(body.printerName || '').slice(0, 200) || null,
-      String(body.printerId || '').slice(0, 200) || null, String(body.userAgent || '').slice(0, 500));
+      String(body.printerId || '').slice(0, 200) || null, String(body.userAgent || '').slice(0, 500),
+      String(body.appVersion || '').slice(0, 32) || null, body.appEnvironment === 'production' ? 'production' : body.appEnvironment === 'test' ? 'test' : null);
   const deviceCode = getDeviceCode(clientId);
   res.json({ ok: true, serverTime: new Date().toISOString(), deviceCode });
 });
@@ -287,6 +288,7 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     CASE WHEN c.online=1 AND datetime(c.last_seen)>=datetime('now','-10 seconds') THEN 1 ELSE 0 END AS online,
     c.bluetooth_supported AS bluetoothSupported,c.bluetooth_connected AS bluetoothConnected,
     c.printer_connected AS printerConnected,c.printer_name AS printerName,c.printer_id AS printerId,
+    c.app_version AS appVersion,c.app_environment AS appEnvironment,
     (SELECT COUNT(*) FROM push_subscriptions ps WHERE ps.client_id=c.client_id) AS pushSubscribed,
     c.user_agent AS userAgent,c.last_seen AS lastSeen FROM client_status c ORDER BY c.last_seen DESC`).all();
   const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();

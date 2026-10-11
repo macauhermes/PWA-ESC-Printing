@@ -176,3 +176,16 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
   .mobile-header-storage .storage-tooltip{left:0;right:auto;max-width:calc(100vw - 24px);white-space:normal;text-align:left}
 }
 @media(min-width:601px){.mobile-header-storage{display:none}}
+
+/* Strict single-line mobile metadata: flex children shrink instead of wrapping. */
+@media(max-width:600px){
+  .mobile-header-meta{display:flex!important;flex-flow:row nowrap!important;align-items:center;justify-content:flex-start!important;gap:4px;width:100%;max-width:100%;min-width:0;overflow:hidden;white-space:nowrap!important;word-break:keep-all;overflow-wrap:normal;text-align:left;}
+  .mobile-header-system{display:flex;flex:1 1 0%;width:0;max-width:none;min-width:0;gap:4px;overflow:hidden;white-space:nowrap;justify-content:flex-start;}
+  .mobile-header-system>span{flex:0 0 auto;min-width:0;white-space:nowrap;}
+  .mobile-header-system .device-code-meta{flex:1 1 auto;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .mobile-header-meta>.mobile-username{flex:0 1 56px;width:56px;max-width:56px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .mobile-header-storage{display:flex;flex:0 0 auto;align-items:center;justify-content:flex-start;gap:3px;min-width:0;margin:0;white-space:nowrap;}
+  .mobile-header-storage .storage-label{flex:0 0 auto;white-space:nowrap;}
+  .mobile-header-storage .storage-meter{flex:0 0 26px;width:26px;min-width:26px;height:18px;min-height:18px;margin:0;padding:0;}
+  .mobile-header-storage .storage-tooltip{left:0;right:auto;max-width:calc(100vw - 24px);white-space:normal;}
+}

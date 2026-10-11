@@ -43,10 +43,14 @@ CREATE TABLE IF NOT EXISTS media (
   kind TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL, original_name TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS client_devices (
+  client_id TEXT PRIMARY KEY, device_code TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE TABLE IF NOT EXISTS client_work (
   id TEXT PRIMARY KEY, client_id TEXT NOT NULL, user_id TEXT NOT NULL, username TEXT NOT NULL,
   title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', event_date TEXT, printer_name TEXT,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  event_code TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_client_work_client_created ON client_work(client_id, created_at DESC);
 CREATE TABLE IF NOT EXISTS work_media (
@@ -83,6 +87,8 @@ CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, title TEXT NOT NU
 
 const workColumns = db.pragma('table_info(client_work)') as { name: string }[];
 if (!workColumns.some(c => c.name === 'printer_name')) db.exec('ALTER TABLE client_work ADD COLUMN printer_name TEXT');
+if (!workColumns.some(c => c.name === 'event_code')) db.exec('ALTER TABLE client_work ADD COLUMN event_code TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_client_work_event_code ON client_work(event_code) WHERE event_code IS NOT NULL');
 const sessionColumns = db.pragma('table_info(sessions)') as { name: string }[];
 if (!sessionColumns.some(c => c.name === 'client_id')) db.exec('ALTER TABLE sessions ADD COLUMN client_id TEXT');
 if (!sessionColumns.some(c => c.name === 'login_type')) db.exec("ALTER TABLE sessions ADD COLUMN login_type TEXT NOT NULL DEFAULT 'passkey'");

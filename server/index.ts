@@ -30,12 +30,7 @@ const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
 app.use(cors({ origin: [origin, 'http://localhost:5173'], credentials: false }));
 app.use(express.json({ limit: '2mb' }));
-app.use('/uploads', (req: any, res: any, next: any) => {
-  const filename = path.basename(decodeURIComponent(String(req.path || '')));
-  const expiredWorkMedia = db.prepare(`SELECT 1 AS expired FROM work_media m JOIN client_work w ON w.id=m.work_id WHERE m.filename=? AND datetime(w.created_at)<=datetime('now','-24 hours') LIMIT 1`).get(filename);
-  if (expiredWorkMedia) return res.status(404).end();
-  next();
-}, express.static(uploadDir));
+app.use('/uploads', express.static(uploadDir));
 
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);

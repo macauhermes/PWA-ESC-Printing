@@ -324,5 +324,6 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 /* Unread notification count in the client navigation. */
 .tabs .notification-unread-bubble{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;margin-left:6px;padding:0 5px;border-radius:999px;background:#2563eb;color:#fff;font-size:11px;font-weight:700;line-height:1;vertical-align:middle}
-.notification-subscription-actions{display:flex;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:wrap}
-@media(max-width:600px){.notification-subscription-actions{align-items:center;flex-direction:row;justify-content:flex-start}.notification-subscription-actions button{width:auto;max-width:100%}}
+.notification-subscription-actions{display:flex;align-items:stretch;justify-content:flex-start;gap:8px;flex-wrap:wrap}
+.notification-subscription-actions button{flex:1 1 0;min-width:0;min-height:42px;padding:11px 10px;display:inline-flex;align-items:center;justify-content:center;white-space:normal}
+@media(max-width:600px){.notification-subscription-actions{align-items:stretch;flex-direction:row;justify-content:flex-start;flex-wrap:nowrap}.notification-subscription-actions button{width:0;max-width:none;flex:1 1 0;min-height:42px;padding:11px 6px;font-size:14px}}

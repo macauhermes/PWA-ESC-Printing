@@ -285,3 +285,6 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 .attachment-remove-button:hover:not(:disabled){background:#f3f4f6;color:#111827;}
 .attachment-remove-button:disabled{opacity:.45;}
 .attachment-file-size{flex:0 0 auto;color:#6b7280;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+
+.queue-actions{margin-top:10px;gap:8px;}
+.queue-actions button{flex:0 1 auto;min-width:104px;}

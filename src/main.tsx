@@ -258,6 +258,8 @@ function App() {
   const [tab, setTab] = useState('print');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [workSubmitting, setWorkSubmitting] = useState(false);
+  const uploadingLocalWorkIds = useRef(new Set<string>());
   const [printer, setPrinter] = useState<Printer | null>(null);
   const [savedPrinter, setSavedPrinter] = useState<any>(null);
   const [codePageIndex, setCodePageIndex] = useState('0');
@@ -633,49 +635,56 @@ function App() {
   }
   async function uploadCurrentWork() {
     const oversized = workMedia.filter(file => file.size > MAX_ATTACHMENT_BYTES);
-    if (oversized.length) { setMessage(`單一附件上限為 500 MiB，以下檔案超出限制：${oversized.map(file=>file.name).join('、')}`); return; }
+    if (oversized.length) { setMessage(\`單一附件上限為 500 MiB，以下檔案超出限制：\${oversized.map(file=>file.name).join('、')}\`); return; }
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
-    setBusy(true);
-    let eventCode = '';
-    const createdAt = new Date().toISOString();
+    setWorkSubmitting(true);
     try {
-      eventCode = await createEventCode();
-      if (!remoteOnline) {
-        const draft = draftFromForm(eventCode, 'queued', createdAt);
-        await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
-        setMessage(`遠端未連線，事件 ${eventCode} 已加入本機上傳隊列，恢復連線後會自動重試。`);
-        return;
-      }
-      setUploadProgress({ loaded:0, total:workMedia.reduce((sum, file) => sum + file.size, 0), percent:0, bytesPerSecond:0 });
-      const formMedia:WorkUploadMedia[] = workMedia.map((file,index) => ({ blob:file, name:file.name, mimeType:mediaMimeType(file.name,file.type), key:formAttachmentKey(file,index) }));
-      setAttachmentUploadStatuses(old => ({...old,...Object.fromEntries(formMedia.map(file=>[file.key,'pending' as AttachmentUploadStatus]))}));
-      await uploadWorkInChunks(token, { title, content:workContent.trim(), eventDate:workDate, eventCode, createdAt }, formMedia, setUploadProgress, (key,status)=>setAttachmentUploadStatuses(old=>({...old,[key]:status})),(key,percent)=>setAttachmentUploadPercents(old=>({...old,[key]:percent})));
-      setUploadedWork(await api('/work', token));
+      const draft = draftFromForm(await createEventCode(), 'queued');
+      await saveLocalDraft(draft);
+      setLocalDrafts(old => [draft, ...old]);
       clearWorkForm();
-      setMessage(`事件已上傳，編號：${eventCode}`);
+      if (remoteOnline) {
+        setMessage(\`事件 \${draft.eventCode} 已加入上傳隊列，正在背景上傳；你可以繼續建立新事件。\`);
+        void uploadLocalWork(draft);
+      } else {
+        setMessage(\`遠端未連線，事件 \${draft.eventCode} 已加入本機上傳隊列，恢復連線後會自動重試。\`);
+      }
     } catch (err) {
-      if (isConnectivityFailure(err) && eventCode && workTitle.trim()) {
-        try {
-          const draft = draftFromForm(eventCode, 'queued', createdAt);
-          await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
-          setMessage(`遠端連線中斷，事件 ${eventCode} 已加入本機上傳隊列，稍後會自動重試。`);
-        } catch { setMessage('上傳失敗，而且無法保存至本機隊列。請勿關閉頁面，檢查裝置儲存空間後重試。'); }
-      } else setMessage(err instanceof Error ? err.message : '上傳事件失敗；表單內容仍保留，請重試。');
-    } finally { setBusy(false); window.setTimeout(() => setUploadProgress(null), 1200); }
+      setMessage(err instanceof Error ? err.message : '無法將事件保存至本機上傳隊列；表單內容仍保留，請檢查儲存空間後重試。');
+    } finally { setWorkSubmitting(false); }
   }
 
   async function saveLocalWork(e: React.FormEvent) {
     e.preventDefault();
     const oversized = workMedia.filter(file => file.size > MAX_ATTACHMENT_BYTES);
-    if (oversized.length) { setMessage(`單一附件上限為 500 MiB，以下檔案超出限制：${oversized.map(file=>file.name).join('、')}`); return; }
+    if (oversized.length) { setMessage(\`單一附件上限為 500 MiB，以下檔案超出限制：\${oversized.map(file=>file.name).join('、')}\`); return; }
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
-    setBusy(true);
+    setWorkSubmitting(true);
     try {
       const draft = draftFromForm(await createEventCode());
       await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
-      setMessage(`事件已暫存在手機。事件編號：${draft.eventCode}`);
+      setMessage(\`事件已暫存在手機。事件編號：\${draft.eventCode}\`);
     } catch (err) { setMessage(err instanceof Error ? err.message : '手機暫存失敗；可能是裝置儲存空間不足。請減少影片大小後再試。'); }
-    finally { setBusy(false); }
+    finally { setWorkSubmitting(false); }
+  }
+
+  function removeSelectedAttachment(index: number) {
+    if (workSubmitting) return;
+    const removed = workMedia[index];
+    const remaining = workMedia.filter((_, itemIndex) => itemIndex !== index);
+    setWorkMedia(remaining);
+    setAttachmentUploadStatuses(old => {
+      const next = { ...old };
+      Object.keys(next).filter(key => key.startsWith('form:')).forEach(key => delete next[key]);
+      remaining.forEach((file, itemIndex) => { next[formAttachmentKey(file, itemIndex)] = 'pending'; });
+      return next;
+    });
+    setAttachmentUploadPercents(old => {
+      const next = { ...old };
+      Object.keys(next).filter(key => key.startsWith('form:')).forEach(key => delete next[key]);
+      return next;
+    });
+    setMessage(\`已移除附件：\${removed?.name || '附件'}\`);
   }
 
   async function uploadLocalWork(draft: LocalDraft) {

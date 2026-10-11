@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import packageJson from '../package.json';
 import { createRoot } from 'react-dom/client';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import './style.css';
 
+const APP_VERSION = packageJson.version;
+const BUILD_ENVIRONMENT = import.meta.env.VITE_APP_ENV || (import.meta.env.PROD ? 'production' : 'test');
+const environmentLabel = (value: string) => value === 'production' ? '正式環境' : '測試環境';
 type User = { id: string; username: string; displayName: string; role: string };
 type EventItem = { id: string; title: string; content: string; event_date?: string; created_at: string; media: { id: string; kind: string; original_name: string; url: string }[] };
 type Job = { id: string; job_date: string; title: string; status: string; detail: string; created_at: string };
@@ -166,6 +170,9 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [deviceCode, setDeviceCode] = useState(() => localStorage.getItem('esc-device-code') || '');
   const [remoteOnline, setRemoteOnline] = useState(false);
+  const [serverVersion, setServerVersion] = useState('');
+  const [serverEnvironment, setServerEnvironment] = useState('');
+  const [updateRequired, setUpdateRequired] = useState(false);
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [uploadedWork, setUploadedWork] = useState<DeviceWork[]>([]);
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
@@ -232,7 +239,15 @@ function App() {
       try {
         const response = await fetch('/api/health', { cache: 'no-store' });
         if (!response.ok) throw new Error('API unavailable');
-        if (active) setRemoteOnline(true);
+        const versionResponse = await fetch('/api/version', { cache: 'no-store' });
+        if (!versionResponse.ok) throw new Error('Version endpoint unavailable');
+        const versionInfo: { version: string; environment: string } = await versionResponse.json();
+        if (active) {
+          setRemoteOnline(true);
+          setServerVersion(versionInfo.version);
+          setServerEnvironment(versionInfo.environment);
+          if (versionInfo.version !== APP_VERSION) setUpdateRequired(true);
+        }
       } catch { if (active) setRemoteOnline(false); }
     };
     void check();
@@ -669,12 +684,26 @@ function App() {
       : [['print', '打印'], ['notifications', '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')], ['events', '事件管理']];
     return base;
   }, [user?.role, notifications]);
-  if (!user) return <><div className={`remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端已連線' : '遠端未連線'} </div><main className="auth-shell"><section className="panel auth-panel"><div className="brand">ESC <span>PRINTING</span></div><h1>PWA ESC Printing</h1>
+  const displayedVersion = serverVersion || APP_VERSION;
+  const displayedEnvironment = environmentLabel(serverEnvironment || BUILD_ENVIRONMENT);
+  const forceRefresh = async () => {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(registration => registration.unregister()));
+    }
+    if ('caches' in window) {
+      const cacheNames = await window.caches.keys();
+      await Promise.all(cacheNames.map(cacheName => window.caches.delete(cacheName)));
+    }
+    window.location.replace(`${window.location.pathname}?forceUpdate=${Date.now()}`);
+  };
+  if (updateRequired) return <main className="auth-shell"><section className="panel auth-panel update-required" role="alert"><div className="brand">ESC <span>PRINTING</span></div><h1>需要更新系統</h1><p>伺服器已更新至 v{serverVersion}，目前裝置仍在使用 v{APP_VERSION}。為確保功能及資料相容，請先更新再繼續使用。</p><p className="version-label">環境：{displayedEnvironment}</p><button className="full" onClick={() => void forceRefresh()}>立即強制更新並重新載入</button></section></main>;
+  if (!user) return <><div className={`remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端已連線' : '遠端未連線'} </div><main className="auth-shell"><section className="panel auth-panel"><div className="brand">ESC <span>PRINTING</span></div><small className="version-label">v{displayedVersion} · {displayedEnvironment}</small><h1>PWA ESC Printing</h1>
     {isDesktop && <div className="actions"><button className={adminMode ? 'secondary' : ''} onClick={() => { setAdminMode(false); setMessage(''); }}>一般用戶</button><button className={adminMode ? '' : 'secondary'} onClick={() => { setAdminMode(true); setMessage(''); }}>管理員登入</button></div>}
     {adminMode && isDesktop ? <><p className="muted">管理員請使用伺服器 .env 設定的固定帳號及密碼登入。</p><label>管理員帳號<input value={adminUsernameInput} onChange={e => setAdminUsernameInput(e.target.value)} autoComplete="username" /></label><label>管理員密碼<input type="password" value={adminPasswordInput} onChange={e => setAdminPasswordInput(e.target.value)} autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter' && adminUsernameInput && adminPasswordInput && !busy) void adminLogin(); }} /></label><button className="full" disabled={busy || !adminUsernameInput || !adminPasswordInput} onClick={() => void adminLogin()}>{busy ? '登入中…' : '管理員登入'}</button></> : <><p className="muted">一般用戶使用 Passkey 安全登入。任何人均可自行註冊，不需要管理員批准。</p><label>使用者名稱<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" placeholder="例如：operator01" /></label><label>顯示名稱（首次註冊）<input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="操作人員" /></label><div className="actions"><button disabled={busy || !username} onClick={login}>{busy ? '處理中…' : 'Passkey 登入'}</button><button className="secondary" disabled={busy || !username} onClick={register}>註冊 Passkey</button></div><p className="hint">首次使用請先註冊 Passkey。管理員帳號僅能透過桌面版的固定帳密登入。</p></>}
     {message && <p className="notice">{message}</p>}</section></main></>;
 
-  return <div className="app-shell"><header className="topbar"><div><div className="brand">ESC <span>PRINTING</span></div><small>收據打印 · 事件 · 稽核</small></div><div className="account"><span>{user.displayName || user.username}</span>{user.role !== 'admin' && <span className="device-code">設備碼 {deviceCode || '同步中'}</span>}<button className="secondary compact" onClick={logout}>登出</button><span className={`remote-status inline ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端連線' : '遠端離線'}</span></div></header>
+  return <div className="app-shell"><header className="topbar"><div><div className="brand">ESC <span>PRINTING</span></div><small>收據打印 · 事件 · 稽核</small><small className="version-label">v{displayedVersion} · {displayedEnvironment}</small></div><div className="account"><span>{user.displayName || user.username}</span>{user.role !== 'admin' && <span className="device-code">設備碼 {deviceCode || '同步中'}</span>}<button className="secondary compact" onClick={logout}>登出</button><span className={`remote-status inline ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端連線' : '遠端離線'}</span></div></header>
     {uploadProgress && <div className="upload-progress global-upload-progress" role="status" aria-live="polite"><div className="upload-progress-heading"><strong>附件上傳中</strong><span>{uploadProgress.percent === null ? `${formatBytes(uploadProgress.loaded)} 已傳送` : `${uploadProgress.percent}%`}</span></div><progress max={100} value={uploadProgress.percent ?? 0} /><div className="upload-progress-details"><span>{formatBytes(uploadProgress.loaded)}{uploadProgress.total ? ` / ${formatBytes(uploadProgress.total)}` : ' 已傳送'}</span><span>目前速度約 {uploadProgress.bytesPerSecond > 0 ? formatSpeed(uploadProgress.bytesPerSecond) : '計算中…'}</span></div></div>}<nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'tab active' : 'tab'} onClick={() => { setTab(key); setMessage(''); }}>{label}</button>)}</nav>
     <main className="content">
       {message && <div className="notice" role="status">{message}<button className="notice-close" onClick={() => setMessage('')}>×</button></div>}

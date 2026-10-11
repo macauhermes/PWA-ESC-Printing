@@ -404,6 +404,59 @@ const storage = multer.diskStorage({
   filename: (_req, file, cb) => cb(null, crypto.randomUUID() + path.extname(file.originalname).slice(0, 12))
 });
 const upload = multer({ storage, limits: { fileSize: 250 * 1024 * 1024, files: 20 }, fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) });
+// Chunked media upload keeps each request small enough for restrictive mobile/proxy body limits.
+const chunkDir = path.join(uploadDir, '.chunks');
+fs.mkdirSync(chunkDir, { recursive: true });
+const chunkUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 190 * 1024, files: 1 } });
+type CompletedWorkUpload = { userId:string; filename:string; originalName:string; mimeType:string; size:number; createdAt:number };
+const completedWorkUploads = new Map<string, CompletedWorkUpload>();
+function cleanupWorkUploads() {
+  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+  for (const [mediaId, item] of completedWorkUploads) {
+    if (item.createdAt < cutoff) {
+      try { fs.unlinkSync(path.join(uploadDir, item.filename)); } catch {}
+      completedWorkUploads.delete(mediaId);
+    }
+  }
+}
+app.post('/api/work/chunk', auth, chunkUpload.single('chunk'), (req: any, res) => {
+  cleanupWorkUploads();
+  const uploadId = String(req.body.uploadId || '');
+  const originalName = String(req.body.filename || 'attachment').split(/[\\/]/).pop()!.slice(0, 255) || 'attachment';
+  const mimeType = String(req.body.mimeType || req.file?.mimetype || '').slice(0, 128);
+  const index = Number(req.body.index);
+  const totalChunks = Number(req.body.totalChunks);
+  const totalSize = Number(req.body.totalSize);
+  const chunkSize = Number(req.body.chunkSize);
+  if (!/^[0-9a-f-]{36}$/i.test(uploadId) || !req.file || !Number.isInteger(index) || !Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 1600 || index < 0 || index >= totalChunks || !Number.isInteger(totalSize) || totalSize < 1 || totalSize > 250 * 1024 * 1024 || chunkSize !== 180 * 1024 || !/^(image|video)\//i.test(mimeType)) {
+    return res.status(400).json({ error: '附件分段資料無效，請重新選擇影片或圖片後重試。' });
+  }
+  const tempPath = path.join(chunkDir, uploadId + '.part');
+  try {
+    const expectedOffset = index * chunkSize;
+    if (index === 0) fs.writeFileSync(tempPath, req.file.buffer);
+    else {
+      const currentSize = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : -1;
+      if (currentSize !== expectedOffset) return res.status(409).json({ error: '附件分段次序不一致，請重新上傳。' });
+      fs.appendFileSync(tempPath, req.file.buffer);
+    }
+    if (index < totalChunks - 1) return res.json({ ok:true, index });
+    const actualSize = fs.statSync(tempPath).size;
+    if (actualSize !== totalSize) {
+      try { fs.unlinkSync(tempPath); } catch {}
+      return res.status(400).json({ error: '附件大小校驗失敗，請重新上傳。' });
+    }
+    const ext = path.extname(originalName).slice(0, 12);
+    const filename = crypto.randomUUID() + ext;
+    fs.renameSync(tempPath, path.join(uploadDir, filename));
+    const mediaId = crypto.randomUUID();
+    completedWorkUploads.set(mediaId, { userId:req.user.id, filename, originalName, mimeType, size:actualSize, createdAt:Date.now() });
+    res.json({ ok:true, mediaId });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : '無法保存附件分段。' });
+  }
+});
+
 // Mobile clients may keep work locally and upload it only when requested.
 app.get('/api/work', auth, (req: any, res) => {
   const clientId = String(req.user.client_id || '').slice(0, 128);
@@ -443,6 +496,17 @@ app.post('/api/work', auth, upload.array('media', 20), (req: any, res) => {
   const parsedCreatedAt = submittedCreatedAt ? Date.parse(submittedCreatedAt) : NaN;
   const createdAt = Number.isFinite(parsedCreatedAt) ? new Date(parsedCreatedAt).toISOString() : new Date().toISOString();
   const files = (req.files || []) as Express.Multer.File[];
+  const uploadedMediaIds = Array.isArray(req.body.uploadedMediaIds) ? req.body.uploadedMediaIds.map(String) : [];
+  const chunkedFiles: Array<{ mediaId:string; item:CompletedWorkUpload }> = [];
+  for (const mediaId of uploadedMediaIds) {
+    const item = completedWorkUploads.get(mediaId);
+    if (!item || item.userId !== req.user.id) {
+      for (const file of files) try { fs.unlinkSync(file.path); } catch {}
+      return res.status(400).json({ error: '附件上傳工作階段已失效，請重新上傳附件。' });
+    }
+    chunkedFiles.push({ mediaId, item });
+  }
+  if (chunkedFiles.length + files.length > 20) return res.status(400).json({ error: '每個事件最多可附加 20 個圖片或影片。' });
   if (!clientId) {
     for (const file of files) try { fs.unlinkSync(file.path); } catch {}
     return res.status(409).json({ error: '客戶端尚未初始化；請等待裝置心跳完成後再上傳。' });
@@ -458,10 +522,13 @@ app.post('/api/work', auth, upload.array('media', 20), (req: any, res) => {
       .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate, printerName, eventCode, createdAt);
     for (const file of files) db.prepare('INSERT INTO work_media(id,work_id,kind,filename,mime_type,original_name) VALUES(?,?,?,?,?,?)')
       .run(id(), workId, file.mimetype.startsWith('image/') ? 'image' : 'video', file.filename, file.mimetype, file.originalname);
+    for (const { mediaId, item } of chunkedFiles) db.prepare('INSERT INTO work_media(id,work_id,kind,filename,mime_type,original_name) VALUES(?,?,?,?,?,?)')
+      .run(id(), workId, item.mimeType.startsWith('image/') ? 'image' : 'video', item.filename, item.mimeType, item.originalName);
   });
   try { transaction(); } catch (err) { for (const file of files) try { fs.unlinkSync(file.path); } catch {}; throw err; }
-  audit(req.user, 'client.work_uploaded', 'client_work', workId, { clientId, title, printerName, mediaCount: files.length });
-  res.status(201).json({ id: workId, clientId, title, content, eventDate, eventCode, printerName, mediaCount: files.length, createdAt });
+  for (const { mediaId } of chunkedFiles) completedWorkUploads.delete(mediaId);
+  audit(req.user, 'client.work_uploaded', 'client_work', workId, { clientId, title, printerName, mediaCount: files.length + chunkedFiles.length });
+  res.status(201).json({ id: workId, clientId, title, content, eventDate, eventCode, printerName, mediaCount: files.length + chunkedFiles.length, createdAt });
 });
 
 app.get('/api/events', auth, (req: any, res) => {

@@ -271,6 +271,7 @@ function App() {
   const [savedPrinter, setSavedPrinter] = useState<any>(null);
   const [codePageIndex, setCodePageIndex] = useState('0');
   const [printNote, setPrintNote] = useState('');
+  const [showReceiptPreview, setShowReceiptPreview] = useState(false);
   const [events, setEvents] = useState<EventItem[]>([]);
   const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
   const localDraftsRef = useRef<LocalDraft[]>([]);
@@ -970,8 +971,11 @@ function App() {
           <label>測試收據備註（會打印在收據上，最多 500 字）<textarea rows={3} maxLength={500} value={printNote} onChange={e => setPrintNote(e.target.value)} placeholder="例如：櫃檯 A／紙卷更換後測試／設備編號 PR-01" /></label>
           <label>ESC/POS 字碼表索引（依打印機手冊）<input type="number" min="0" max="255" value={codePageIndex} onChange={e => setCodePageIndex(e.target.value)} /></label>
           <p className="hint">測試收據使用模擬商品與付款金額，不代表真實交易。文字以 Big5 編碼；不同打印機的 Big5 code page 編號可能不同。</p>
-          <div className="actions"><button disabled={busy || !printer?.characteristic} onClick={() => void printTest()}>{busy ? '打印中…' : '打印測試'}</button></div></article>
-        <article className="panel"><h2>測試付款收據預覽</h2><div className="receipt-preview">
+          <div className="actions"><button className="secondary" type="button" onClick={() => setShowReceiptPreview(true)}>預覽</button><button disabled={busy || !printer?.characteristic} onClick={() => void printTest()}>{busy ? '打印中…' : '打印測試'}</button></div></article>
+      </section>
+      {showReceiptPreview && <div className="storage-popup-overlay" role="presentation" onClick={() => setShowReceiptPreview(false)}><section className="storage-popup receipt-preview-popup" role="dialog" aria-modal="true" aria-label="測試付款收據預覽" onClick={event => event.stopPropagation()}>
+        <div className="storage-capacity-heading"><strong>測試付款收據預覽</strong><button type="button" className="storage-popup-close" aria-label="關閉預覽" onClick={() => setShowReceiptPreview(false)}>×</button></div>
+        <div className="receipt-preview">
           <div className="receipt-title">示範商店 · 付款收據</div><p>地址：澳門示範路 88 號</p><p>電話：+853 2888 1234</p><hr/>
           <p>單號：TEST-20261011-001</p><p>日期：{new Date().toLocaleString('zh-TW')}</p><p>收銀員：測試帳戶</p><hr/>
           <div className="receipt-columns"><span>商品／項目</span><span>數量／金額</span></div><div className="receipt-columns"><span>咖啡飲品（測試）× 1</span><span>$28.00</span></div>
@@ -979,8 +983,9 @@ function App() {
           <div className="receipt-columns"><span>小計</span><span>$118.00</span></div><div className="receipt-columns"><span>稅項（示範）</span><span>$0.00</span></div>
           <div className="receipt-columns total"><span>應付總額</span><span>$118.00</span></div><div className="receipt-columns"><span>現金付款</span><span>$120.00</span></div><div className="receipt-columns"><span>找零</span><span>$2.00</span></div>
           <p>付款方式：現金（模擬）</p><p>交易參考：DEMO-NOT-A-REAL-PAYMENT</p><p>狀態：打印測試，非真實交易</p><hr/>
-          <p>備註：{printNote.trim() || '（未填寫）'}</p><p className="receipt-footer">感謝惠顧，歡迎再次光臨</p></div></article>
-      </section>}
+          <p>備註：{printNote.trim() || '（未填寫）'}</p><p className="receipt-footer">感謝惠顧，歡迎再次光臨</p>
+        </div>
+      </section></div>}
       {tab === 'notifications' && user.role === 'admin' && <section className="panel"><h2>發送通知</h2><p className="muted">通知集中於此頁管理。通知會保存到客戶端站內通知中心；如已設定 VAPID，亦會向指定已訂閱設備或所有已訂閱設備發送 Web Push。管理員不顯示自己的通知收件匣。</p><form onSubmit={sendAdminNotification}><label>接收對象<select value={notificationTarget} onChange={e=>setNotificationTarget(e.target.value)}><option value="">廣播所有已訂閱設備</option>{(adminDashboard?.clients || []).filter(c => Number(c.pushSubscribed || 0) > 0).map(c=><option key={c.clientId} value={c.clientId}>{c.username} · {c.clientId.slice(0,8)}… {c.online ? '（在線）' : '（離線）'} · 已訂閱推播</option>)}</select></label><label>通知標題<input required maxLength={200} value={notificationTitle} onChange={e=>setNotificationTitle(e.target.value)} placeholder="例如：系統維護通知" /></label><label>通知內容<textarea required maxLength={5000} rows={4} value={notificationBody} onChange={e=>setNotificationBody(e.target.value)} placeholder="輸入要通知客戶端的訊息" /></label><button disabled={busy || !notificationTitle.trim() || !notificationBody.trim()}>{notificationTarget ? '推播指定設備' : '廣播所有已訂閱設備'}</button></form></section>}
             {tab === 'notifications' && user.role !== 'admin' && <section className="panel"><div className="admin-heading"><div><h2>通知</h2><p className="muted">通知保存在伺服器 SQLite，每 3 秒自動更新；重新登入後仍可查看。啟用 Web App 推播後，即使 App 在背景也可接收系統通知（視瀏覽器及作業系統支援而定）。</p></div><span className="count">{notifications.filter(n => !n.isRead).length} 則未讀</span></div><div className="actions"><button disabled={busy} onClick={() => void subscribePush()}>啟用／修復推播訂閱</button></div><p className="hint">iPhone／iPad：請先將網站加入主畫面並從主畫面開啟；Android：請使用最新版 Chrome 或支援 Web Push 的瀏覽器。兩者均須使用 HTTPS 並允許通知。</p>{notifications.length === 0 ? <p className="muted">目前沒有通知。</p> : notifications.map(n => <article className="list-item" key={n.id}><div className="list-heading"><strong>{n.title}</strong><small>{n.createdAt}</small></div><p>{n.body}</p><div className="actions"><span className="muted">{n.targetClientId ? '指定給此客戶端' : '全體廣播'}</span>{n.isRead ? <span className="status">已讀</span> : <button className="secondary compact" onClick={() => void markNotificationRead(n.id)}>標記已讀</button>}</div></article>)}</section>}{tab === 'events' && user.role !== 'admin' && <section className="grid two">
         <article className="panel"><h2>建立事件</h2><p className="muted">新事件預設只儲存在這部手機的瀏覽器，不會自動上傳。需要時可手動上傳系統，或使用目前已連接的熱敏打印機列印固定測試收據。</p>

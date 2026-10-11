@@ -135,7 +135,7 @@ async function awaitRegistrationOptions(user: any, existing: any[]) {
     userID: new TextEncoder().encode(user.id),
     attestationType: 'none',
     excludeCredentials: existing.map((c: any) => ({ id: c.credential_id, transports: c.transports ? JSON.parse(c.transports) : undefined })),
-    authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' }
+    authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' }
   });
 }
 app.post('/api/auth/register/verify', async (req, res) => {
@@ -158,24 +158,30 @@ app.post('/api/auth/register/verify', async (req, res) => {
 });
 app.post('/api/auth/login/options', async (req, res) => {
   const username = String(req.body.username || '').trim().toLowerCase();
-  if (adminUsername && username === adminUsername) return res.status(403).json({ error: 'Use administrator password login on a desktop browser' });
-  const user = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
-  if (!user) { db.prepare('INSERT INTO login_events(username,event,success,detail) VALUES(?,?,0,?)').run(username || '(empty)', 'login', 'Unknown username'); return res.status(404).json({ error: 'User not found; register a passkey first' }); }
-  const creds = db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[];
-  if (!creds.length) return res.status(400).json({ error: 'No passkey registered for this user' });
-  const options = await generateAuthenticationOptions({ rpID, allowCredentials: creds.map((c: any) => ({ id: c.credential_id, transports: c.transports ? JSON.parse(c.transports) : undefined })), userVerification: 'preferred' });
+  if (username && adminUsername && username === adminUsername) return res.status(403).json({ error: 'Use administrator password login on a desktop browser' });
+  let user: any = null;
+  let allowCredentials: any[] | undefined;
+  if (username) {
+    user = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
+    if (!user) { db.prepare('INSERT INTO login_events(username,event,success,detail) VALUES(?,?,0,?)').run(username, 'login', 'Unknown username'); return res.status(404).json({ error: 'User not found; register a passkey first' }); }
+    const creds = db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[];
+    if (!creds.length) return res.status(400).json({ error: 'No passkey registered for this user' });
+    allowCredentials = creds.map((c: any) => ({ id: c.credential_id, transports: c.transports ? JSON.parse(c.transports) : undefined }));
+  }
+  // No allowCredentials means WebAuthn can discover the user from a resident/discoverable Passkey.
+  const options = await generateAuthenticationOptions({ rpID, ...(allowCredentials ? { allowCredentials } : {}), userVerification: 'preferred' });
   const cid = challenge('login', options.challenge);
-  res.json({ ...options, challengeId: cid, username });
+  res.json({ ...options, challengeId: cid, ...(username ? { username } : {}) });
 });
 app.post('/api/auth/login/verify', async (req, res) => {
   const { username, challengeId, response } = req.body;
-  const user = db.prepare('SELECT * FROM users WHERE username=?').get(String(username || '').toLowerCase()) as any;
   const expectedChallenge = takeChallenge(challengeId, 'login');
   try {
-    if (!user || !expectedChallenge) throw new Error('Challenge expired or user not found');
-    const stored = db.prepare('SELECT * FROM passkeys WHERE user_id=? AND credential_id=?').get(user.id, response.id) as any;
+    if (!expectedChallenge || !response?.id) throw new Error('Challenge expired or invalid');
+    const stored = db.prepare('SELECT * FROM passkeys WHERE credential_id=?').get(response.id) as any;
     if (!stored) throw new Error('Passkey not registered');
-    const credential: WebAuthnCredential = { id: stored.credential_id, publicKey: Buffer.from(stored.public_key, 'base64url'), counter: stored.counter, transports: stored.transports ? JSON.parse(stored.transports) : [] } as any;
+    const user = db.prepare('SELECT * FROM users WHERE id=?').get(stored.user_id) as any;
+    if (!user || (username && user.username !== String(username).toLowerCase())) throw new Error('Passkey does not match this account');
     const verification = await verifyAuthenticationResponse({ response: response as AuthenticationResponseJSON, expectedChallenge, expectedOrigin: origin, expectedRPID: rpID, credential });
     if (!verification.verified) throw new Error('Passkey verification failed');
     db.prepare('UPDATE passkeys SET counter=? WHERE credential_id=?').run(verification.authenticationInfo.newCounter, stored.credential_id);

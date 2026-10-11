@@ -698,7 +698,7 @@ function App() {
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
     setWorkSubmitting(true);
     try {
-      const draft = draftFromForm(await createEventCode(), 'queued');
+      const draft = { ...draftFromForm(await createEventCode(), 'queued'), uploadDispatchSeq: await nextUploadDispatchSequence() };
       await saveLocalDraft(draft);
       localDraftsRef.current = [draft, ...localDraftsRef.current];
       setLocalDrafts(old => [draft, ...old]);
@@ -771,12 +771,18 @@ function App() {
       return;
     }
     const cancelled = { ...draft, syncStatus:'cancelled' as const };
+    // Remove it from the scheduler's synchronous source of truth before awaiting
+    // IndexedDB, so a finishing upload cannot pick it up during the write.
+    localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? cancelled : item);
+    setLocalDrafts(old => old.map(item => item.id === draft.id ? cancelled : item));
     try {
       await saveLocalDraft(cancelled);
-      localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? cancelled : item);
-      setLocalDrafts(old => old.map(item => item.id === draft.id ? cancelled : item));
       setMessage(`事件 ${draft.eventCode} 已取消排程；可選擇繼續上傳或轉為暫存。`);
-    } catch (err) { setMessage(err instanceof Error ? err.message : '保存取消狀態失敗，請重試。'); }
+    } catch (err) {
+      localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? draft : item);
+      setLocalDrafts(old => old.map(item => item.id === draft.id ? draft : item));
+      setMessage(err instanceof Error ? err.message : '保存取消狀態失敗，請重試。');
+    }
   }
   async function continueLocalWork(draft: LocalDraft) {
     try {
@@ -849,8 +855,8 @@ function App() {
       setMessage('此暫存事件沒有標題，請先編輯或重新建立事件。');
       return;
     }
-    const queued: LocalDraft = { ...draft, uploadDispatchSeq: await nextUploadDispatchSequence(), syncStatus:'queued' };
     try {
+      const queued: LocalDraft = { ...draft, uploadDispatchSeq: await nextUploadDispatchSequence(), syncStatus:'queued' };
       await saveLocalDraft(queued);
       localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? queued : item);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));

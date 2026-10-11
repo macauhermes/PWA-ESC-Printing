@@ -19,6 +19,8 @@ type DeviceWork = { id:string; clientId:string; userId:string; username:string; 
 type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string; eventCode:string; syncStatus?:'draft'|'queued'|'uploading'|'failed'; media:WorkMedia[] };
 type MediaViewer = { src:string; kind:'image'|'video'; name:string; revokeOnClose:boolean; recordCreatedAt?:string };
 type UploadProgress = { loaded:number; total:number; percent:number|null; bytesPerSecond:number };
+type LocalStorageInfo = { quotaBytes:number; usageBytes:number; measured:boolean };
+const DEFAULT_STORAGE_LIMIT_BYTES = 5 * 1024 ** 3;
 type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; operations:AdminOperation[]; jobs:Job[]; deviceWork:DeviceWork[]; serverTime:string };
 type NotificationItem = { id:string; title:string; body:string; targetClientId?:string|null; createdAt:string; isRead:number; readAt?:string };
 
@@ -122,9 +124,45 @@ function countdownLabel(createdAt: string, now: number) {
   const seconds = Math.floor(ms % 60000 / 1000);
   return { label: ms <= 0 ? '已到期' : `剩餘 ${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}`, percent: Math.max(0, ms / DAY_MS * 100), expired: ms <= 0 };
 }
+function mediaBytes(drafts: LocalDraft[]) {
+  return drafts.reduce((total, draft) => total + draft.media.reduce((sum, item) => sum + Number(item.blob?.size ?? item.size ?? 0), 0), 0);
+}
+async function assertLocalDraftCapacity(value: LocalDraft) {
+  const existing = await loadLocalDrafts();
+  const isNewDraft = !existing.some(item => item.id === value.id);
+  const addedBytes = isNewDraft ? value.media.reduce((sum, item) => sum + Number(item.blob?.size ?? item.size ?? 0), 0) : 0;
+  try {
+    const storage = navigator.storage;
+    if (storage?.estimate) {
+      const estimate = await storage.estimate();
+      const quota = Number(estimate.quota || 0);
+      const usage = Number(estimate.usage || 0);
+      if (quota > 0 && Number.isFinite(quota)) {
+        if (usage + addedBytes > quota * 0.95) {
+          throw new Error(`本機儲存空間不足：新增附件後可能超過瀏覽器配額的 95%。可用估算空間約 ${Math.max(0, quota * 0.95 - usage) / 1024 ** 3 < 0.01 ? (Math.max(0, quota * 0.95 - usage) / 1024 ** 2).toFixed(0) + ' MB' : (Math.max(0, quota * 0.95 - usage) / 1024 ** 3).toFixed(2) + ' GB'}。請先同步或刪除不需要的本機暫存附件。`);
+        }
+        return;
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('本機儲存空間不足')) throw error;
+    // Unsupported / failed estimate: enforce a conservative 5 GiB app-level cap below.
+  }
+  const fallbackUsage = mediaBytes(existing) + addedBytes;
+  if (fallbackUsage > DEFAULT_STORAGE_LIMIT_BYTES) {
+    throw new Error('無法檢查瀏覽器實際配額；本機暫存按 5 GB 保守上限管理。新增附件會超出此上限，請先同步或刪除不需要的本機暫存附件。');
+  }
+}
 async function saveLocalDraft(value: LocalDraft) {
+  await assertLocalDraftCapacity(value);
   const db = await printerStore();
-  await new Promise<void>((resolve, reject) => { const tx = db.transaction('workDrafts', 'readwrite'); tx.objectStore('workDrafts').put(value); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction('workDrafts', 'readwrite');
+    tx.objectStore('workDrafts').put(value);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error?.name === 'QuotaExceededError' ? new Error('瀏覽器拒絕保存：本機儲存配額已滿。請先同步或刪除不需要的暫存附件。') : tx.error);
+    tx.onabort = () => reject(tx.error?.name === 'QuotaExceededError' ? new Error('瀏覽器拒絕保存：本機儲存配額已滿。請先同步或刪除不需要的暫存附件。') : tx.error);
+  });
   db.close();
 }
 async function loadLocalDrafts(): Promise<LocalDraft[]> {
@@ -166,6 +204,7 @@ function App() {
   const [printNote, setPrintNote] = useState('');
   const [events, setEvents] = useState<EventItem[]>([]);
   const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
+  const [localStorageInfo, setLocalStorageInfo] = useState<LocalStorageInfo>({ quotaBytes: DEFAULT_STORAGE_LIMIT_BYTES, usageBytes: 0, measured: false });
   const [workMedia, setWorkMedia] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [deviceCode, setDeviceCode] = useState(() => localStorage.getItem('esc-device-code') || '');
@@ -279,6 +318,22 @@ function App() {
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, [token, user]);
   useEffect(() => { loadLocalDrafts().then(setLocalDrafts).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, []);
+  useEffect(() => {
+    let active = true;
+    const refreshStorageInfo = async () => {
+      const fallbackUsage = mediaBytes(localDrafts);
+      try {
+        const estimate = await navigator.storage?.estimate();
+        if (estimate && Number(estimate.quota) > 0) {
+          if (active) setLocalStorageInfo({ quotaBytes: Number(estimate.quota), usageBytes: Number(estimate.usage || 0), measured: true });
+          return;
+        }
+      } catch { /* use conservative fallback when storage estimation is unavailable */ }
+      if (active) setLocalStorageInfo({ quotaBytes: DEFAULT_STORAGE_LIMIT_BYTES, usageBytes: fallbackUsage, measured: false });
+    };
+    void refreshStorageInfo();
+    return () => { active = false; };
+  }, [localDrafts]);
 
   useEffect(() => {
     if (!token || !user) return;
@@ -728,7 +783,7 @@ function App() {
       {tab === 'notifications' && user.role === 'admin' && <section className="panel"><h2>發送通知</h2><p className="muted">通知集中於此頁管理。通知會保存到客戶端站內通知中心；如已設定 VAPID，亦會向指定已訂閱設備或所有已訂閱設備發送 Web Push。管理員不顯示自己的通知收件匣。</p><form onSubmit={sendAdminNotification}><label>接收對象<select value={notificationTarget} onChange={e=>setNotificationTarget(e.target.value)}><option value="">廣播所有已訂閱設備</option>{(adminDashboard?.clients || []).filter(c => Number(c.pushSubscribed || 0) > 0).map(c=><option key={c.clientId} value={c.clientId}>{c.username} · {c.clientId.slice(0,8)}… {c.online ? '（在線）' : '（離線）'} · 已訂閱推播</option>)}</select></label><label>通知標題<input required maxLength={200} value={notificationTitle} onChange={e=>setNotificationTitle(e.target.value)} placeholder="例如：系統維護通知" /></label><label>通知內容<textarea required maxLength={5000} rows={4} value={notificationBody} onChange={e=>setNotificationBody(e.target.value)} placeholder="輸入要通知客戶端的訊息" /></label><button disabled={busy || !notificationTitle.trim() || !notificationBody.trim()}>{notificationTarget ? '推播指定設備' : '廣播所有已訂閱設備'}</button></form></section>}
             {tab === 'notifications' && user.role !== 'admin' && <section className="panel"><div className="admin-heading"><div><h2>通知</h2><p className="muted">通知保存在伺服器 SQLite，每 3 秒自動更新；重新登入後仍可查看。啟用 Web App 推播後，即使 App 在背景也可接收系統通知（視瀏覽器及作業系統支援而定）。</p></div><span className="count">{notifications.filter(n => !n.isRead).length} 則未讀</span></div><div className="actions"><button disabled={busy} onClick={() => void subscribePush()}>啟用／修復推播訂閱</button></div><p className="hint">iPhone／iPad：請先將網站加入主畫面並從主畫面開啟；Android：請使用最新版 Chrome 或支援 Web Push 的瀏覽器。兩者均須使用 HTTPS 並允許通知。</p>{notifications.length === 0 ? <p className="muted">目前沒有通知。</p> : notifications.map(n => <article className="list-item" key={n.id}><div className="list-heading"><strong>{n.title}</strong><small>{n.createdAt}</small></div><p>{n.body}</p><div className="actions"><span className="muted">{n.targetClientId ? '指定給此客戶端' : '全體廣播'}</span>{n.isRead ? <span className="status">已讀</span> : <button className="secondary compact" onClick={() => void markNotificationRead(n.id)}>標記已讀</button>}</div></article>)}</section>}{tab === 'events' && user.role !== 'admin' && <section className="grid two">
         <article className="panel"><h2>建立事件</h2><p className="muted">新事件預設只儲存在這部手機的瀏覽器，不會自動上傳。需要時可手動上傳系統，或使用目前已連接的熱敏打印機列印固定測試收據。</p>
-          <form onSubmit={saveLocalWork}><label>事件標題<input required maxLength={200} value={workTitle} onChange={e=>setWorkTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容／工作備註<textarea rows={5} maxLength={10000} value={workContent} onChange={e=>setWorkContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label className="event-date-field">事件日期與時間<input className="event-datetime-input" type="datetime-local" value={workDate} onChange={e=>setWorkDate(e.target.value)} /></label><label>圖片／影片附件（可多選）<input type="file" accept="image/*,video/*" multiple onChange={e=>setWorkMedia(Array.from(e.target.files || []))} /></label><p className="muted">已選取 {workMedia.length} 個附件；每個事件最多 20 個圖片／影片，單一檔案上限 100 MB。</p>
+          <div className="storage-capacity" role="status" aria-live="polite"><div className="storage-capacity-heading"><strong>本機暫存容量（估算）</strong><strong>上限 {(localStorageInfo.quotaBytes / 1024 ** 3).toFixed(2)} GB</strong></div><p>已使用 {(localStorageInfo.usageBytes / 1024 ** 3).toFixed(2)} GB · 剩餘估算 {Math.max(0, localStorageInfo.quotaBytes - localStorageInfo.usageBytes) / 1024 ** 3 < 0.01 ? (Math.max(0, localStorageInfo.quotaBytes - localStorageInfo.usageBytes) / 1024 ** 2).toFixed(0) + ' MB' : (Math.max(0, localStorageInfo.quotaBytes - localStorageInfo.usageBytes) / 1024 ** 3).toFixed(2) + ' GB'}</p><progress max="100" value={Math.min(100, localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) * 100)} /><small>{localStorageInfo.measured ? '容量為瀏覽器回報的此 PWA 網站儲存配額估算（包含快取及其他網站資料），並非整部手機的總磁碟容量。' : '此瀏覽器無法提供可靠配額；暫以 5 GB 作為本機暫存上限，已使用量按本機事件附件估算。'}</small>{localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) >= 0.8 && <p className="storage-warning">儲存空間已使用 {Math.round(localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) * 100)}%，建議先同步事件或刪除不需要的本機暫存附件。</p>}</div><form onSubmit={saveLocalWork}><label>事件標題<input required maxLength={200} value={workTitle} onChange={e=>setWorkTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容／工作備註<textarea rows={5} maxLength={10000} value={workContent} onChange={e=>setWorkContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label className="event-date-field">事件日期與時間<input className="event-datetime-input" type="datetime-local" value={workDate} onChange={e=>setWorkDate(e.target.value)} /></label><label>圖片／影片附件（可多選）<input type="file" accept="image/*,video/*" multiple onChange={e=>setWorkMedia(Array.from(e.target.files || []))} /></label><p className="muted">已選取 {workMedia.length} 個附件；每個事件最多 20 個圖片／影片，單一檔案上限 100 MB。</p>
           {workMedia.map((file,i)=><p className="muted" key={file.name+i}>{file.type.startsWith('video/')?'影片':'圖片'}：{file.name}（{(file.size/1024/1024).toFixed(1)} MB）</p>)}<div className="actions"><button type="submit" disabled={busy || !workTitle.trim()}>暫存於手機</button><button type="button" disabled={busy || !workTitle.trim()} onClick={()=>void uploadCurrentWork()}>上傳事件及附件</button></div></form>
           <p className="hint">手機暫存只保存在目前瀏覽器／裝置；清除網站資料或更換裝置可能導致暫存遺失。暫存內容不會出現在後台，直到按下「上傳系統」。</p>
         </article>

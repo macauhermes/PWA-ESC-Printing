@@ -124,6 +124,72 @@ docker compose logs --tail=200 app
 
 健康檢查端點為容器內的 `http://127.0.0.1:8787/api/health`。若使用不同網域，請同步修改 `docker-compose.yml` 的 `APP_ORIGIN`、`RP_ID`、`VIRTUAL_HOST`、`LETSENCRYPT_HOST` 和電郵設定。Passkey/WebAuthn 的 `APP_ORIGIN` 必須與使用者實際開啟的 HTTPS 網址一致。不要刪除同層的 `./app-data` 或 `./app-uploads` 目錄，否則會失去持久化資料。
 
+## 客戶手機端公開 API 與用戶驗證
+
+本節列出一般用戶的手機瀏覽器／已安裝 PWA 在註冊、登入、設備心跳、事件工作記錄、打印偏好及通知功能會使用的 API。API 與前端同源，正式環境應透過 HTTPS 存取；以下路徑省略共同前綴 `/api`，例如 `POST /auth/login/options` 的完整路徑是 `POST /api/auth/login/options`。
+
+### 驗證方式與安全邊界
+
+- **一般用戶使用 Passkey（WebAuthn）**：註冊時由伺服器產生註冊選項及一次性 challenge，瀏覽器呼叫系統 Passkey／Face ID／Touch ID／裝置 PIN 或相容的安全金鑰完成簽署，再把回應送回伺服器驗證。登入採用相同的 challenge-response 流程；伺服器會驗證 challenge、網站 Origin、RP ID 及憑證簽章，不會以用戶名稱本身作為登入憑證。
+- **註冊流程**：先呼叫 `POST /auth/register/options`，再呼叫 `POST /auth/register/verify`。使用者名稱需為 3–40 個小寫英文字母、數字、點、底線或連字號；員工編號必須是數字，且不可與其他帳戶重複。聯絡人姓名、電話及電郵屬補充資料。現有實作只驗證員工編號格式及唯一性，**不會連接外部人事系統核實員工身份**。
+- **登入流程**：呼叫 `POST /auth/login/options` 取得 challenge，再由瀏覽器 Passkey 完成驗證並呼叫 `POST /auth/login/verify`。登入可傳入使用者名稱；省略使用者名稱時，瀏覽器可嘗試使用可探索的 Passkey。成功回應會包含 session `token`、使用者資料、`clientId` 及設備碼。
+- **已登入 API**：在 HTTP Header 加上 `Authorization: Bearer <token>`。前端目前把 token 保存在瀏覽器的 `localStorage`（鍵名 `esc-token`），每次 API 請求附帶此 Header。伺服器資料庫只保存 token 的 SHA-256 雜湊；session 有效期為 7 天。過期或無效時通常回傳 HTTP 401，客戶端需重新登入。
+- **登出**：`POST /auth/logout` 會撤銷目前 session。客戶端亦應清除本機 token。
+- **設備識別**：`clientId` 用於把登入 session 與該瀏覽器／PWA 的狀態、工作記錄及推播訂閱關聯；心跳回應會提供六位 Base58 設備碼。設備碼及 `clientId` 不是密碼，也不能代替 Bearer token。
+- **網站設定必須一致**：WebAuthn 的 `APP_ORIGIN` 必須與用戶實際開啟的網址一致，`RP_ID` 必須是相符的網域名稱。正式部署請使用 HTTPS。伺服器可用 `preferredAuthenticatorType: localDevice` 提示瀏覽器優先選擇本機驗證器，但最終顯示 Face ID、其他裝置 QR code 或安全金鑰選項仍由瀏覽器、作業系統、Passkey 儲存位置及裝置設定決定。
+
+### 公開（不需登入）API
+
+| 方法 | 路徑 | 用途／主要回應 |
+| --- | --- | --- |
+| `GET` | `/health` | 健康檢查；回傳 `ok` 及服務名稱。 |
+| `GET` | `/version` | 回傳前端比對版本用的 `version` 及 `environment`；使用 `Cache-Control: no-store`。 |
+| `GET` | `/config` | 回傳 WebAuthn RP 名稱、RP ID、預期 Origin 及 VAPID 公開金鑰；不回傳 VAPID 私鑰。 |
+| `POST` | `/auth/register/options` | 產生 Passkey 註冊選項及 `challengeId`。JSON 包含 `username`、`employeeNumber`，以及可選的 `employeeName`、`contactPhone`、`contactEmail`。 |
+| `POST` | `/auth/register/verify` | 提交 `username`、`challengeId`、WebAuthn `response`，及可選的 `clientId` 完成註冊；成功回傳 `verified`、`clientId`、`deviceCode`。 |
+| `POST` | `/auth/login/options` | 產生登入 challenge；可傳入 `username`，省略則使用可探索憑證流程。 |
+| `POST` | `/auth/login/verify` | 提交 `challengeId`、WebAuthn `response`、可選的 `username`／`clientId`；成功回傳 session token、user、clientId 及設備碼。 |
+
+註冊與登入 challenge 在伺服器端有效期為 **5 分鐘且只能使用一次**。以上驗證端點雖然不要求既有 Bearer token，但必須完成伺服器端 WebAuthn 驗證才會建立有效帳戶憑證或登入 session。
+
+### 一般用戶登入後使用的 API
+
+除另有註明，以下端點均須附帶 `Authorization: Bearer <token>`。JSON 請求使用 `Content-Type: application/json`；附件上傳使用 `multipart/form-data`。
+
+| 方法 | 路徑 | 用途／主要資料 |
+| --- | --- | --- |
+| `GET` | `/me` | 驗證 session 並取得目前用戶資料及角色。 |
+| `POST` | `/auth/logout` | 撤銷目前 session。 |
+| `POST` | `/client/heartbeat` | 每隔一段時間回報客戶端狀態，包括 `clientId`、瀏覽器 User-Agent、Bluetooth／打印機連線狀態及打印機資料；回傳伺服器時間及設備碼。 |
+| `GET` | `/work` | 取得目前登入 session 所關聯客戶端的已上傳工作記錄及附件資料。需先完成客戶端初始化；未初始化時回傳 409。 |
+| `POST` | `/work/chunk` | 分段上傳單一圖片／影片附件。表單欄位包括 `chunk`、`uploadId`、`filename`、`mimeType`、`index`、`totalChunks`、`totalSize`、`chunkSize`；每段預期 160 KiB，單檔上限 500 MiB。最後一段成功時回傳 `mediaId`。 |
+| `POST` | `/work` | 建立已上傳工作記錄。可傳 `title`、`content`、`eventDate`、`eventCode`、`createdAt`；附件可直接以 `media` 上傳，或以 `uploadedMediaIds` 引用已完成的分段上傳。每個事件最多 20 個附件。成功通常回傳 HTTP 201 及記錄 ID；相同客戶端的 `eventCode` 重試會避免重複建立。 |
+| `DELETE` | `/work/:id` | 刪除目前客戶端自己的工作記錄及其附件。 |
+| `GET` | `/printer-preference` | 取得一般用戶保存的打印機偏好。 |
+| `POST` | `/printer-preference` | 儲存 `deviceId`、`deviceName`。 |
+| `POST` | `/printer-action` | 記錄打印機 `connected`、`disconnected` 或 `connection_failed` 狀態及相關資料。 |
+| `POST` | `/receipt/encode` | 將 `text` 編碼為 Big5，回傳 Base64、編碼名稱及 `codePageIndex`，供測試收據打印使用。 |
+| `POST` | `/receipt/print-log` | 記錄測試收據打印請求的打印機名稱、狀態及備註等稽核資料。 |
+| `POST` | `/push/subscribe` | 儲存瀏覽器 Push API 產生的訂閱 JSON（包含 `endpoint`、`keys.p256dh`、`keys.auth`）；需先完成設備初始化及伺服器 VAPID 設定。 |
+| `POST` | `/push/test` | 向目前用戶已保存的推播訂閱發送測試通知；回傳 `sent` 及 `total`。 |
+| `GET` | `/notifications` | 取得發送給所有客戶端或目前客戶端的通知，以及此客戶端的已讀狀態；需先完成設備初始化。 |
+| `POST` | `/notifications/:id/read` | 將指定且目前客戶端有權查看的通知標記為已讀。 |
+
+### 常見 HTTP 狀態碼
+
+- `200`: 請求成功。
+- `201`: 新工作記錄建立成功。
+- `400`: 請求資料、WebAuthn 回應或附件分段資料無效。
+- `401`: 缺少、失效或無效的 Bearer token，或登入驗證失敗。
+- `403`: 帳戶、角色或操作不符合權限要求。
+- `404`: 指定記錄／通知不存在，或登入帳戶尚未註冊。
+- `409`: 資源衝突、客戶端尚未初始化或附件分段次序不一致。
+- `413`: 附件超過伺服器允許的大小限制。
+- `415`: 附件格式不受支援。
+- `503`: 伺服器尚未設定推播所需的 VAPID 金鑰等必要設定。
+
+管理員專用端點（例如 `/admin/*`、`/audit`、`/logins` 及資料清理操作）不屬於一般客戶手機端 API。管理員使用伺服器環境變數中的固定帳密登入，並受管理員角色及桌面瀏覽器限制；請勿把管理員憑證放入手機端或前端程式碼。
+
 ## 限制及後續工作
 
 - Web Bluetooth 不允許網站任意掃描或在沒有使用者手勢/授權時靜默重新連線。瀏覽器 IndexedDB 保存的裝置 ID 不是可跨裝置/瀏覽器重用的永久硬體識別碼；若瀏覽器不提供 `getDevices()` 或授權被撤銷，使用者可能需要再次選取。

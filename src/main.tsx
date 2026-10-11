@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import packageJson from '../package.json';
 import { createRoot } from 'react-dom/client';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
@@ -802,13 +802,18 @@ function App() {
     setLocalDrafts(current => current.filter(draft => remainingMs(draft.createdAt, clockNow) > 0));
     void Promise.all(expired.map(draft => deleteLocalDraft(draft.id).catch(() => {})));
   }, [clockNow, localDrafts]);
+  const wasRemoteOnline = useRef(false);
   useEffect(() => {
-    if (!remoteOnline || !token || !user || busy) return;
+    if (!remoteOnline) { wasRemoteOnline.current = false; return; }
+    if (!token || !user) return;
+    const justReconnected = !wasRemoteOnline.current;
+    wasRemoteOnline.current = true;
     const retryQueued = () => {
+      if (busy) return;
       const queued = localDrafts.find(draft => draft.syncStatus === 'queued' && remainingMs(draft.createdAt, Date.now()) > 0);
       if (queued) void uploadLocalWork(queued);
     };
-    retryQueued();
+    if (justReconnected) retryQueued();
     const timer = window.setInterval(retryQueued, 15000);
     return () => window.clearInterval(timer);
   }, [remoteOnline, token, user, busy, localDrafts]);

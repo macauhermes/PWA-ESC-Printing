@@ -744,7 +744,7 @@ function App() {
         setLocalDrafts(old => old.map(item => item.id === draft.id ? draft : item));
       } catch (err) { setMessage(err instanceof Error ? err.message : '無法為舊暫存記錄補發事件編號。'); return; }
     }
-    if (draft.syncStatus !== 'queued' || !remoteOnline || uploadingLocalWorkIds.current.size > 0 || uploadingLocalWorkIds.current.has(draft.id)) return;
+    if (draft.syncStatus !== 'queued' || !token || !user || uploadingLocalWorkIds.current.size > 0 || uploadingLocalWorkIds.current.has(draft.id)) return;
     const smallestQueued = localDraftsRef.current
       .filter(item => item.syncStatus === 'queued' && remainingMs(item.createdAt, Date.now()) > 0)
       .sort((a,b) => eventSequenceNumber(a) - eventSequenceNumber(b) || a.createdAt.localeCompare(b.createdAt))[0];

@@ -108,17 +108,24 @@ app.post('/api/auth/register/options', async (req, res) => {
   const contactEmail = String(req.body.contactEmail || '').trim();
   if (!/^[a-z0-9._-]{3,40}$/.test(username)) return res.status(400).json({ error: '帳號必須為 3-40 個字元，只可使用 a-z、0-9、點、底線或連字號。' });
   if (!/^[0-9]+$/.test(employeeNumber)) return res.status(400).json({ error: '員工編號必須填寫，而且只允許 0-9 數字。' });
-  if (!employeeName) return res.status(400).json({ error: '請填寫名稱。' });
-  const existingUser = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
-  if (existingUser) return res.status(409).json({ error: '此帳號已存在，請直接登入。' });
-  const existingEmployee = db.prepare('SELECT username FROM users WHERE employee_number=?').get(employeeNumber) as any;
+  if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) return res.status(400).json({ error: '電郵格式不正確。' });
+  let user = db.prepare('SELECT * FROM users WHERE username=?').get(username) as any;
+  if (user?.role === 'admin') return res.status(403).json({ error: 'Administrator accounts cannot register a passkey' });
+  const existing = user ? db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[] : [];
+  if (existing.length > 0) return res.status(409).json({ error: '此帳號已註冊 Passkey，請直接登入。' });
+  const existingEmployee = db.prepare('SELECT username FROM users WHERE employee_number=? AND username<>?').get(employeeNumber, username) as any;
   if (existingEmployee) return res.status(409).json({ error: '此員工編號已註冊，請聯絡管理員。' });
-  const user = { id: id(), username, display_name: username, role: 'user' };
-  db.prepare('INSERT INTO users(id,username,display_name,employee_number,employee_name,contact_phone,contact_email,role) VALUES(?,?,?,?,?,?,?,?)')
-    .run(user.id, username, username, employeeNumber, employeeName, contactPhone || null, contactEmail || null, user.role);
-  const existing = db.prepare('SELECT credential_id,transports FROM passkeys WHERE user_id=?').all(user.id) as any[];
-  if (existing.length > 0) return res.status(409).json({ error: 'This username already has a passkey. Ask an administrator to add another authenticator.' });
-  const options = await awaitRegistrationOptions(user, existing);
+  const displayName = employeeName || username;
+  if (user) {
+    db.prepare('UPDATE users SET display_name=?,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?')
+      .run(username, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, user.id);
+    user = { ...user, display_name: username, employee_number: employeeNumber, employee_name: employeeName || null, contact_phone: contactPhone || null, contact_email: contactEmail || null };
+  } else {
+    user = { id: id(), username, display_name: username, employee_number: employeeNumber, employee_name: employeeName || null, contact_phone: contactPhone || null, contact_email: contactEmail || null, role: 'user' };
+    db.prepare('INSERT INTO users(id,username,display_name,employee_number,employee_name,contact_phone,contact_email,role) VALUES(?,?,?,?,?,?,?,?)')
+      .run(user.id, username, username, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, user.role);
+  }
+  const options = await awaitRegistrationOptions({ ...user, display_name: displayName }, existing);
   const cid = challenge('register', options.challenge);
   res.json({ ...options, challengeId: cid, userId: user.id });
 });

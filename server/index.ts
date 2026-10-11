@@ -30,13 +30,36 @@ const uploadDir = path.resolve(process.env.UPLOAD_DIR || './uploads');
 fs.mkdirSync(uploadDir, { recursive: true });
 app.use(cors({ origin: [origin, 'http://localhost:5173'], credentials: false }));
 app.use(express.json({ limit: '2mb' }));
-app.use('/uploads', express.static(uploadDir));
+app.use('/uploads', (req: any, res: any, next: any) => {
+  const filename = path.basename(decodeURIComponent(String(req.path || '')));
+  const expiredWorkMedia = db.prepare(`SELECT 1 AS expired FROM work_media m JOIN client_work w ON w.id=m.work_id WHERE m.filename=? AND datetime(w.created_at)<=datetime('now','-24 hours') LIMIT 1`).get(filename);
+  if (expiredWorkMedia) return res.status(404).end();
+  next();
+}, express.static(uploadDir));
 
 if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(process.env.VAPID_SUBJECT || 'mailto:admin@example.com', process.env.VAPID_PUBLIC_KEY, process.env.VAPID_PRIVATE_KEY);
 }
 
 const id = () => crypto.randomUUID();
+const base58Alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+function getDeviceCode(clientId: string): string {
+  const existing = db.prepare('SELECT device_code FROM client_devices WHERE client_id=?').get(clientId) as { device_code:string } | undefined;
+  if (existing) return existing.device_code;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    let code = '';
+    for (let i = 0; i < 6; i++) code += base58Alphabet[crypto.randomInt(base58Alphabet.length)];
+    try {
+      db.prepare('INSERT INTO client_devices(client_id,device_code) VALUES(?,?)').run(clientId, code);
+      return code;
+    } catch (error) {
+      const retry = db.prepare('SELECT device_code FROM client_devices WHERE client_id=?').get(clientId) as {device_code:string}|undefined;
+      if (retry) return retry.device_code;
+      if (!(error instanceof Error) || !/UNIQUE constraint failed/i.test(error.message)) throw error;
+    }
+  }
+  throw new Error('無法分配設備碼，請稍後重試。');
+}
 const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const audit = (user: any, action: string, type?: string, entityId?: string, detail?: unknown) =>
   db.prepare('INSERT INTO audit_log(user_id,username,action,entity_type,entity_id,detail) VALUES(?,?,?,?,?,?)')
@@ -104,6 +127,7 @@ async function awaitRegistrationOptions(user: any, existing: any[]) {
 app.post('/api/auth/register/verify', async (req, res) => {
   try {
     const { username, challengeId, response } = req.body;
+    const clientId = String(req.body.clientId || '').slice(0, 128) || crypto.randomUUID();
     const user = db.prepare('SELECT * FROM users WHERE username=?').get(String(username).toLowerCase()) as any;
     const expectedChallenge = takeChallenge(challengeId, 'register');
     if (!user || !expectedChallenge) return res.status(400).json({ error: 'Registration challenge expired or invalid' });
@@ -113,8 +137,9 @@ app.post('/api/auth/register/verify', async (req, res) => {
     const cred = info.credential || { id: info.credentialID, publicKey: info.credentialPublicKey, counter: info.counter, transports: response.response?.transports };
     db.prepare('INSERT OR REPLACE INTO passkeys(credential_id,user_id,public_key,counter,transports) VALUES(?,?,?,?,?)')
       .run(cred.id, user.id, Buffer.from(cred.publicKey).toString('base64url'), cred.counter || 0, JSON.stringify(cred.transports || response.response?.transports || []));
-    audit(publicUser(user), 'auth.passkey_registered', 'user', user.id);
-    res.json({ verified: true });
+    const deviceCode = getDeviceCode(clientId);
+    audit(publicUser(user), 'auth.passkey_registered', 'user', user.id, { clientId, deviceCode });
+    res.json({ verified: true, deviceCode, clientId });
   } catch (e) { res.status(400).json({ error: e instanceof Error ? e.message : 'Registration failed' }); }
 });
 app.post('/api/auth/login/options', async (req, res) => {
@@ -142,10 +167,11 @@ app.post('/api/auth/login/verify', async (req, res) => {
     db.prepare('UPDATE passkeys SET counter=? WHERE credential_id=?').run(verification.authenticationInfo.newCounter, stored.credential_id);
     const token = crypto.randomBytes(32).toString('base64url');
     const clientId = String(req.body.clientId || '').slice(0, 128) || crypto.randomUUID();
+    const deviceCode = getDeviceCode(clientId);
     db.prepare('INSERT INTO sessions(token_hash,user_id,client_id,expires_at) VALUES(?,?,?,?)').run(hash(token), user.id, clientId, Date.now() + 7 * 24 * 60 * 60_000);
     db.prepare('INSERT INTO login_events(user_id,username,event,success,detail) VALUES(?,?,?,1,?)').run(user.id, user.username, 'login', 'WebAuthn passkey verified');
     audit(publicUser(user), 'auth.login_success', 'user', user.id);
-    res.json({ token, user: publicUser(user) });
+    res.json({ token, user: publicUser(user), deviceCode, clientId });
   } catch (e) {
     db.prepare('INSERT INTO login_events(user_id,username,event,success,detail) VALUES(?,?,?,0,?)').run(user?.id || null, String(username || '(empty)'), 'login', e instanceof Error ? e.message : 'Verification failed');
     res.status(401).json({ error: e instanceof Error ? e.message : 'Login failed' });
@@ -212,7 +238,8 @@ app.post('/api/client/heartbeat', auth, (req: any, res) => {
     .run(clientId, req.user.id, req.user.username, body.bluetoothSupported ? 1 : 0, body.bluetoothConnected ? 1 : 0,
       body.printerConnected ? 1 : 0, String(body.printerName || '').slice(0, 200) || null,
       String(body.printerId || '').slice(0, 200) || null, String(body.userAgent || '').slice(0, 500));
-  res.json({ ok: true, serverTime: new Date().toISOString() });
+  const deviceCode = getDeviceCode(clientId);
+  res.json({ ok: true, serverTime: new Date().toISOString(), deviceCode });
 });
 
 app.get('/api/logins', auth, requireAdmin, (req: any, res) => {
@@ -240,7 +267,7 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     c.user_agent AS userAgent,c.last_seen AS lastSeen FROM client_status c ORDER BY c.last_seen DESC`).all();
   const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();
   const jobs = db.prepare('SELECT * FROM daily_jobs ORDER BY created_at DESC LIMIT 200').all();
-  const deviceWork = db.prepare(`SELECT w.id,w.client_id AS clientId,w.user_id AS userId,w.username,w.title,w.content,w.event_date AS eventDate,w.created_at AS createdAt,w.printer_name AS printerName
+  const deviceWork = db.prepare(`SELECT w.id,w.client_id AS clientId,w.user_id AS userId,w.username,w.title,w.content,w.event_date AS eventDate,w.created_at AS createdAt,w.printer_name AS printerName,w.event_code AS eventCode
     FROM client_work w ORDER BY w.created_at DESC`).all() as any[];
   const workMedia = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   for (const work of deviceWork) work.media = workMedia.filter(m => m.workId === work.id).map(m => ({ ...m, url: '/uploads/' + m.filename }));
@@ -358,7 +385,7 @@ const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024, files: 2
 app.get('/api/work', auth, (req: any, res) => {
   const clientId = String(req.user.client_id || '').slice(0, 128);
   if (!clientId) return res.status(409).json({ error: '客戶端尚未初始化；請等待裝置心跳完成後再載入工作記錄。' });
-  const rows = db.prepare('SELECT id,client_id AS clientId,user_id AS userId,username,title,content,event_date AS eventDate,created_at AS createdAt,printer_name AS printerName FROM client_work WHERE client_id=? ORDER BY created_at DESC').all(clientId) as any[];
+  const rows = db.prepare(`SELECT id,client_id AS clientId,user_id AS userId,username,title,content,event_date AS eventDate,created_at AS createdAt,printer_name AS printerName,event_code AS eventCode FROM client_work WHERE client_id=? AND datetime(created_at)>datetime('now','-24 hours') ORDER BY created_at DESC`).all(clientId) as any[];
   const media = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   res.json(rows.map(w => ({ ...w, media: media.filter(m => m.workId === w.id).map(m => ({ ...m, url: '/uploads/' + m.filename })) })));
 });
@@ -388,6 +415,7 @@ app.post('/api/work', auth, upload.array('media', 20), (req: any, res) => {
   const title = String(req.body.title || '').trim().slice(0, 200);
   const content = String(req.body.content || '').trim().slice(0, 10000);
   const eventDate = String(req.body.eventDate || '').trim().slice(0, 40) || null;
+  const eventCode = String(req.body.eventCode || '').trim().slice(0, 64) || null;
   const files = (req.files || []) as Express.Multer.File[];
   if (!clientId) {
     for (const file of files) try { fs.unlinkSync(file.path); } catch {}
@@ -400,14 +428,14 @@ app.post('/api/work', auth, upload.array('media', 20), (req: any, res) => {
   const workId = id();
   const printerName = (db.prepare('SELECT printer_name FROM client_status WHERE client_id=?').get(clientId) as { printer_name?: string } | undefined)?.printer_name || null;
   const transaction = db.transaction(() => {
-    db.prepare('INSERT INTO client_work(id,client_id,user_id,username,title,content,event_date,printer_name) VALUES(?,?,?,?,?,?,?,?)')
-      .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate, printerName);
+    db.prepare('INSERT INTO client_work(id,client_id,user_id,username,title,content,event_date,printer_name,event_code) VALUES(?,?,?,?,?,?,?,?,?)')
+      .run(workId, clientId, req.user.id, req.user.username, title, content, eventDate, printerName, eventCode);
     for (const file of files) db.prepare('INSERT INTO work_media(id,work_id,kind,filename,mime_type,original_name) VALUES(?,?,?,?,?,?)')
       .run(id(), workId, file.mimetype.startsWith('image/') ? 'image' : 'video', file.filename, file.mimetype, file.originalname);
   });
   try { transaction(); } catch (err) { for (const file of files) try { fs.unlinkSync(file.path); } catch {}; throw err; }
   audit(req.user, 'client.work_uploaded', 'client_work', workId, { clientId, title, printerName, mediaCount: files.length });
-  res.status(201).json({ id: workId, clientId, title, content, eventDate, printerName, mediaCount: files.length, createdAt: new Date().toISOString() });
+  res.status(201).json({ id: workId, clientId, title, content, eventDate, eventCode, printerName, mediaCount: files.length, createdAt: new Date().toISOString() });
 });
 
 app.get('/api/events', auth, (req: any, res) => {

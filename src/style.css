@@ -73,3 +73,8 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
   .account .account-remote-status{display:none}
   .account .device-code{display:none}
 }
+
+@media(max-width:600px){
+  .remote-status:not(.inline){font-size:0;width:20px;height:20px;justify-content:center;padding:5px;background:transparent;border-color:transparent;box-shadow:none}
+  .remote-status:not(.inline) .remote-light{width:10px;height:10px;flex-basis:10px}
+}

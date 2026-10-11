@@ -135,7 +135,8 @@ async function awaitRegistrationOptions(user: any, existing: any[]) {
     userID: new TextEncoder().encode(user.id),
     attestationType: 'none',
     excludeCredentials: existing.map((c: any) => ({ id: c.credential_id, transports: c.transports ? JSON.parse(c.transports) : undefined })),
-    authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' }
+    authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' },
+    preferredAuthenticatorType: 'localDevice'
   });
 }
 app.post('/api/auth/register/verify', async (req, res) => {

@@ -380,6 +380,7 @@ app.delete('/api/admin/devices/:clientId', auth, requireAdmin, (req: any, res) =
   if (req.user.client_id === clientId) return res.status(400).json({ error: '不能刪除目前管理員登入使用的設備。' });
   const linkedUsers = db.prepare(`SELECT DISTINCT u.id,u.username,u.role FROM users u LEFT JOIN user_devices ud ON ud.user_id=u.id LEFT JOIN sessions s ON s.user_id=u.id AND s.client_id=? LEFT JOIN client_status cs ON cs.user_id=u.id AND cs.client_id=? WHERE ud.client_id=? OR s.client_id=? OR cs.client_id=?`).all(clientId, clientId, clientId, clientId, clientId) as any[];
   if (linkedUsers.some(item => item.role === 'admin' || (adminUsername && item.username === adminUsername))) return res.status(400).json({ error: '此設備關聯管理員帳戶，為避免鎖定管理系統，不能整台刪除。' });
+  const media = db.prepare(`SELECT wm.filename FROM work_media wm JOIN client_work cw ON cw.id=wm.work_id WHERE cw.client_id=?`).all(clientId) as { filename:string }[];
   const removeDevice = db.transaction(() => {
     audit(req.user, 'admin.registration_device_deleted', 'client_device', clientId, { deviceCode: device.deviceCode, deletedUsers: linkedUsers.map(item => item.username) });
     db.prepare('DELETE FROM client_work WHERE client_id=?').run(clientId);
@@ -395,7 +396,6 @@ app.delete('/api/admin/devices/:clientId', auth, requireAdmin, (req: any, res) =
     db.prepare('DELETE FROM client_status WHERE client_id=?').run(clientId);
     db.prepare('DELETE FROM client_devices WHERE client_id=?').run(clientId);
   });
-  const media = db.prepare(`SELECT wm.filename FROM work_media wm JOIN client_work cw ON cw.id=wm.work_id WHERE cw.client_id=?`).all(clientId) as { filename:string }[];
   try { removeDevice(); } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : '刪除設備失敗。' }); }
   for (const item of media) { try { fs.unlinkSync(path.join(uploadDir, item.filename)); } catch {} }
   res.json({ ok: true, deletedUsers: linkedUsers.length, deviceCode: device.deviceCode });

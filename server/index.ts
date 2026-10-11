@@ -256,7 +256,7 @@ app.put('/api/me', auth, requireRegularUser, (req: any, res) => {
   const contactEmail = String(req.body.contactEmail || '').trim().slice(0, 254);
   if (!displayName) return res.status(400).json({ error: '顯示名稱不可留空。' });
   if (!/^[0-9]+$/.test(employeeNumber)) return res.status(400).json({ error: '員工編號必須填寫，而且只允許 0-9 數字。' });
-  if (contactEmail && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(contactEmail)) return res.status(400).json({ error: '電郵格式不正確。' });
+  if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) return res.status(400).json({ error: '電郵格式不正確。' });
   const duplicate = db.prepare('SELECT id FROM users WHERE employee_number=? AND id<>?').get(employeeNumber, req.user.id);
   if (duplicate) return res.status(409).json({ error: '此員工編號已被其他帳戶使用。' });
   db.prepare('UPDATE users SET display_name=?,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?').run(displayName, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, req.user.id);
@@ -353,7 +353,7 @@ app.put('/api/admin/users/:id/profile', auth, requireAdmin, (req: any, res) => {
   const contactEmail = String(req.body.contactEmail || '').trim().slice(0, 254);
   if (!displayName) return res.status(400).json({ error: '顯示名稱不可留空。' });
   if (!/^[0-9]+$/.test(employeeNumber)) return res.status(400).json({ error: '員工編號必須填寫，而且只允許 0-9 數字。' });
-  if (contactEmail && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(contactEmail)) return res.status(400).json({ error: '電郵格式不正確。' });
+  if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) return res.status(400).json({ error: '電郵格式不正確。' });
   const duplicate = db.prepare('SELECT id FROM users WHERE employee_number=? AND id<>?').get(employeeNumber, target.id);
   if (duplicate) return res.status(409).json({ error: '此員工編號已被其他帳戶使用。' });
   db.prepare('UPDATE users SET display_name=?,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?').run(displayName, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, target.id);

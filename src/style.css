@@ -255,3 +255,12 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
   .mobile-header-user .storage-meter.critical .storage-meter-fill{background:#dc2626;}
   .mobile-header-user .storage-tooltip{position:absolute;left:auto;right:0;top:calc(100% + 5px);z-index:100;padding:7px 10px;border:1px solid #94a3b8;border-radius:7px;background:#fff;color:#1e293b!important;box-shadow:0 4px 12px #0002;font-size:11px;font-weight:600;white-space:nowrap;text-align:right;}
 }
+
+
+/* Storage tooltip opens as an overlay from either the label or bar. */
+@media(max-width:600px){
+  .mobile-header-user .storage-label-trigger{display:inline-flex!important;align-items:center;justify-content:center;padding:0!important;border:0!important;background:transparent!important;color:#fff!important;font:inherit!important;line-height:1!important;white-space:nowrap;cursor:pointer;min-height:0!important;box-shadow:none!important;}
+  .mobile-header-user .storage-label-trigger:focus-visible,.mobile-header-user .storage-meter:focus-visible{outline:2px solid #bfdbfe!important;outline-offset:3px!important;}
+}
+.storage-popup-overlay{position:fixed;inset:0;z-index:10000;display:flex;align-items:flex-start;justify-content:center;padding:calc(env(safe-area-inset-top, 0px) + 76px) 16px 16px;background:rgba(15,23,42,.24);}
+.storage-popup{max-width:calc(100vw - 32px);padding:12px 16px;border:1px solid #94a3b8;border-radius:10px;background:#fff;color:#1e293b;box-shadow:0 10px 32px rgba(15,23,42,.24);font-size:14px;font-weight:650;line-height:1.4;text-align:center;white-space:normal;overflow-wrap:anywhere;}

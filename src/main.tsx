@@ -391,7 +391,7 @@ function App() {
     }).catch(() => {});
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, [token, user]);
-  useEffect(() => { loadLocalDrafts().then(drafts => { const normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index]).map(draft => saveLocalDraft(draft).catch(() => {}))); window.setTimeout(() => startNextQueuedUpload(), 0); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, []);
+  useEffect(() => { loadLocalDrafts().then(drafts => { const normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); localDraftsRef.current = normalized; setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index]).map(draft => saveLocalDraft(draft).catch(() => {}))); window.setTimeout(() => startNextQueuedUpload(), 0); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, []);
   useEffect(() => {
     let active = true;
     const refreshStorageInfo = async () => {
@@ -653,6 +653,7 @@ function App() {
     try {
       const draft = draftFromForm(await createEventCode(), 'queued');
       await saveLocalDraft(draft);
+      localDraftsRef.current = [draft, ...localDraftsRef.current];
       setLocalDrafts(old => [draft, ...old]);
       clearWorkForm();
       if (remoteOnline) {
@@ -704,7 +705,9 @@ function App() {
     return Number.isFinite(prefix) && prefix > 0 ? prefix : Number.MAX_SAFE_INTEGER;
   }
   function startNextQueuedUpload() {
-    if (!remoteOnline || !token || !user || uploadingLocalWorkIds.current.size > 0) return;
+    // Do not use the health/version indicator as an upload gate: those probes can fail
+    // while the authenticated work API is reachable. Let the actual request decide.
+    if (!token || !user || uploadingLocalWorkIds.current.size > 0) return;
     const next = localDraftsRef.current
       .filter(draft => draft.syncStatus === 'queued' && remainingMs(draft.createdAt, Date.now()) > 0)
       .sort((a,b) => eventSequenceNumber(a) - eventSequenceNumber(b) || a.createdAt.localeCompare(b.createdAt))[0];
@@ -727,6 +730,7 @@ function App() {
     const queued = { ...draft, syncStatus:'queued' as const };
     try {
       await saveLocalDraft(queued);
+      localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? queued : item);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));
       setMessage(`事件 ${draft.eventCode} 已放回上傳排程，將依最小事件編號順序處理。`);
       window.setTimeout(() => startNextQueuedUpload(), 0);
@@ -791,6 +795,7 @@ function App() {
     const queued: LocalDraft = { ...draft, syncStatus:'queued' };
     try {
       await saveLocalDraft(queued);
+      localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? queued : item);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));
       setMessage(`事件 ${draft.eventCode || '（待補編號）'} 已加入上傳隊列，將依事件編號順序上傳。`);
       window.setTimeout(() => startNextQueuedUpload(), 0);
@@ -913,19 +918,13 @@ function App() {
     void Promise.all(expired.map(draft => deleteLocalDraft(draft.id).catch(() => {})));
   }, [clockNow, localDrafts]);
   useEffect(() => {
-    if (!remoteOnline || !token || !user) return;
+    if (!token || !user) return;
+    // Periodic queue pump is deliberately independent of the health badge. The
+    // actual upload request handles offline/HTTP failures and keeps the draft.
     const timer = window.setInterval(() => startNextQueuedUpload(), 15000);
     window.setTimeout(() => startNextQueuedUpload(), 0);
     return () => window.clearInterval(timer);
-  }, [remoteOnline, token, user]);
-  // Re-run scheduling whenever the persisted queue/UI state changes. This also
-  // handles initial IndexedDB hydration, when a one-shot timeout can run before
-  // localDraftsRef has received the loaded records.
-  useEffect(() => {
-    if (!remoteOnline || !token || !user) return;
-    const timer = window.setTimeout(() => startNextQueuedUpload(), 0);
-    return () => window.clearTimeout(timer);
-  }, [localDrafts, remoteOnline, token, user]);
+  }, [token, user]);
   const tabs = useMemo(() => {
     const base: [string,string][] = user?.role === 'admin'
       ? [['notifications', '通知'], ['users', '用戶管理'], ['device-work', '設備工作記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]

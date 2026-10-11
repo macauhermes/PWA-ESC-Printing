@@ -61,7 +61,7 @@ const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const audit = (user: any, action: string, type?: string, entityId?: string, detail?: unknown) =>
   db.prepare('INSERT INTO audit_log(user_id,username,action,entity_type,entity_id,detail) VALUES(?,?,?,?,?,?)')
     .run(user?.id || null, user?.username || null, action, type || null, entityId || null, detail ? JSON.stringify(detail) : null);
-const publicUser = (u: any) => ({ id: u.id, username: u.username, displayName: u.display_name || u.username, role: u.role, employeeNumber: u.employee_number || '', employeeName: u.employee_name || '', contactPhone: u.contact_phone || '', contactEmail: u.contact_email || '' });
+const publicUser = (u: any) => ({ id: u.id, username: u.username, role: u.role, employeeNumber: u.employee_number || '', employeeName: u.employee_name || '', contactPhone: u.contact_phone || '', contactEmail: u.contact_email || '' });
 const auth = (req: any, res: any, next: any) => {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'Authentication required' });
@@ -115,7 +115,6 @@ app.post('/api/auth/register/options', async (req, res) => {
   if (existing.length > 0) return res.status(409).json({ error: '此帳號已註冊 Passkey，請直接登入。' });
   const existingEmployee = db.prepare('SELECT username FROM users WHERE employee_number=? AND username<>?').get(employeeNumber, username) as any;
   if (existingEmployee) return res.status(409).json({ error: '此員工編號已註冊，請聯絡管理員。' });
-  const displayName = username;
   if (user) {
     db.prepare('UPDATE users SET display_name=?,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?')
       .run(username, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, user.id);
@@ -125,13 +124,13 @@ app.post('/api/auth/register/options', async (req, res) => {
     db.prepare('INSERT INTO users(id,username,display_name,employee_number,employee_name,contact_phone,contact_email,role) VALUES(?,?,?,?,?,?,?,?)')
       .run(user.id, username, username, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, user.role);
   }
-  const options = await awaitRegistrationOptions({ ...user, display_name: displayName }, existing);
+  const options = await awaitRegistrationOptions(user, existing);
   const cid = challenge('register', options.challenge);
   res.json({ ...options, challengeId: cid, userId: user.id });
 });
 async function awaitRegistrationOptions(user: any, existing: any[]) {
   return generateRegistrationOptions({
-    rpName, rpID, userName: user.username, userDisplayName: user.display_name,
+    rpName, rpID, userName: user.username, userDisplayName: user.username,
     userID: new TextEncoder().encode(user.id),
     attestationType: 'none',
     excludeCredentials: existing.map((c: any) => ({ id: c.credential_id, transports: c.transports ? JSON.parse(c.transports) : undefined })),
@@ -249,19 +248,17 @@ app.get('/api/me', auth, (req: any, res) => {
   res.json({ user });
 });
 app.put('/api/me', auth, requireRegularUser, (req: any, res) => {
-  const displayName = String(req.body.displayName || '').trim().slice(0, 100);
   const employeeNumber = String(req.body.employeeNumber ?? '').trim();
   const employeeName = String(req.body.employeeName || '').trim().slice(0, 100);
   const contactPhone = String(req.body.contactPhone || '').trim().slice(0, 40);
   const contactEmail = String(req.body.contactEmail || '').trim().slice(0, 254);
-  if (!displayName) return res.status(400).json({ error: '顯示名稱不可留空。' });
   if (!/^[0-9]+$/.test(employeeNumber)) return res.status(400).json({ error: '員工編號必須填寫，而且只允許 0-9 數字。' });
   if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) return res.status(400).json({ error: '電郵格式不正確。' });
   const duplicate = db.prepare('SELECT id FROM users WHERE employee_number=? AND id<>?').get(employeeNumber, req.user.id);
   if (duplicate) return res.status(409).json({ error: '此員工編號已被其他帳戶使用。' });
-  db.prepare('UPDATE users SET display_name=?,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?').run(displayName, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, req.user.id);
+  db.prepare('UPDATE users SET display_name=username,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?').run(employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, req.user.id);
   const updated = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id) as any;
-  audit(updated, 'user.profile_updated', 'user', updated.id, { fields: ['displayName','employeeNumber','employeeName','contactPhone','contactEmail'] });
+  audit(updated, 'user.profile_updated', 'user', updated.id, { fields: ['employeeNumber','employeeName','contactPhone','contactEmail'] });
   res.json({ user: publicUser(updated) });
 });
 
@@ -298,7 +295,7 @@ app.get('/api/audit', auth, requireAdmin, (req: any, res) => {
 
 // Administrator console APIs. Client heartbeats and dashboard refreshes run every 3 seconds.
 app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
-  const users = db.prepare(`SELECT u.id,u.username,u.display_name AS displayName,u.employee_number AS employeeNumber,
+  const users = db.prepare(`SELECT u.id,u.username,u.employee_number AS employeeNumber,
     u.employee_name AS employeeName,u.contact_phone AS contactPhone,u.contact_email AS contactEmail,u.role,u.created_at AS createdAt,
     (SELECT COUNT(*) FROM passkeys p WHERE p.user_id=u.id) AS passkeyCount,
     (SELECT COUNT(*) FROM sessions s WHERE s.user_id=u.id AND s.expires_at>?) AS activeSessions,
@@ -315,7 +312,7 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     FROM client_devices cd LEFT JOIN client_status cs ON cs.client_id=cd.client_id ORDER BY cd.created_at DESC`).all() as any[];
   for (const device of devices) device.registeredUsers = userDeviceLinks.filter(link => link.clientId === device.clientId).map(link => {
     const item = users.find(candidate => candidate.id === link.userId);
-    return item ? { id: item.id, username: item.username, displayName: item.displayName, registeredAt: link.registeredAt, lastSeen: link.lastSeen } : null;
+    return item ? { id: item.id, username: item.username, registeredAt: link.registeredAt, lastSeen: link.lastSeen } : null;
   }).filter(Boolean);
   const clients = db.prepare(`SELECT c.client_id AS clientId,c.user_id AS userId,c.username,
     CASE WHEN c.online=1 AND datetime(c.last_seen)>=datetime('now','-10 seconds') THEN 1 ELSE 0 END AS online,
@@ -346,18 +343,16 @@ app.put('/api/admin/users/:id/profile', auth, requireAdmin, (req: any, res) => {
   const target = db.prepare('SELECT id,username,role FROM users WHERE id=?').get(req.params.id) as any;
   if (!target) return res.status(404).json({ error: 'User not found' });
   if (target.role === 'admin' || (adminUsername && target.username === adminUsername)) return res.status(400).json({ error: 'The configured administrator profile cannot be edited here' });
-  const displayName = String(req.body.displayName || '').trim().slice(0, 100);
   const employeeNumber = String(req.body.employeeNumber ?? '').trim();
   const employeeName = String(req.body.employeeName || '').trim().slice(0, 100);
   const contactPhone = String(req.body.contactPhone || '').trim().slice(0, 40);
   const contactEmail = String(req.body.contactEmail || '').trim().slice(0, 254);
-  if (!displayName) return res.status(400).json({ error: '顯示名稱不可留空。' });
   if (!/^[0-9]+$/.test(employeeNumber)) return res.status(400).json({ error: '員工編號必須填寫，而且只允許 0-9 數字。' });
   if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) return res.status(400).json({ error: '電郵格式不正確。' });
   const duplicate = db.prepare('SELECT id FROM users WHERE employee_number=? AND id<>?').get(employeeNumber, target.id);
   if (duplicate) return res.status(409).json({ error: '此員工編號已被其他帳戶使用。' });
-  db.prepare('UPDATE users SET display_name=?,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?').run(displayName, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, target.id);
-  audit(req.user, 'admin.user_profile_updated', 'user', target.id, { username: target.username, fields: ['displayName','employeeNumber','employeeName','contactPhone','contactEmail'] });
+  db.prepare('UPDATE users SET display_name=username,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?').run(employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, target.id);
+  audit(req.user, 'admin.user_profile_updated', 'user', target.id, { username: target.username, fields: ['employeeNumber','employeeName','contactPhone','contactEmail'] });
   res.json({ ok: true });
 });
 app.delete('/api/admin/users/:id', auth, requireAdmin, (req: any, res) => {

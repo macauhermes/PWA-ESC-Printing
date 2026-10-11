@@ -146,6 +146,14 @@ async function nextLocalEventSequence(): Promise<number> {
   db.close();
   return value;
 }
+function localDateTimeInputValue(date = new Date()) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 16);
+}
+function localDateInputValue(date = new Date()) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 10);
+}
 function makeEventCode(sequence: number, deviceCode: string, date = new Date()) {
   const day = String(date.getDate()).padStart(2, '0');
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -267,7 +275,7 @@ function App() {
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
   const [workTitle, setWorkTitle] = useState('');
   const [workContent, setWorkContent] = useState('');
-  const [workDate, setWorkDate] = useState(() => new Date().toISOString().slice(0,16));
+  const [workDate, setWorkDate] = useState(() => localDateTimeInputValue());
   const [jobs, setJobs] = useState<Job[]>([]);
   const [logins, setLogins] = useState<any[]>([]);
   const [audits, setAudits] = useState<any[]>([]);
@@ -286,7 +294,7 @@ function App() {
   const [clientId] = useState(() => { const old = localStorage.getItem('esc-client-id'); if (old) return old; const next = crypto.randomUUID(); localStorage.setItem('esc-client-id', next); return next; });
   const [adminDashboard, setAdminDashboard] = useState<AdminDashboard | null>(null);
   const [adminWorkTitle, setAdminWorkTitle] = useState('');
-  const [adminWorkDate, setAdminWorkDate] = useState(new Date().toISOString().slice(0,10));
+  const [adminWorkDate, setAdminWorkDate] = useState(localDateInputValue());
   const [adminWorkDetail, setAdminWorkDetail] = useState('');
   const [adminOpTitle, setAdminOpTitle] = useState('');
   const [adminOpContent, setAdminOpContent] = useState('');
@@ -612,7 +620,7 @@ function App() {
     };
   }
   function clearWorkForm() {
-    setWorkTitle(''); setWorkContent(''); setWorkDate(new Date().toISOString().slice(0,16)); setWorkMedia([]);
+    setWorkTitle(''); setWorkContent(''); setWorkDate(localDateTimeInputValue()); setWorkMedia([]);
   }
   function isConnectivityFailure(error: unknown) {
     const text = error instanceof Error ? error.message : String(error || '');

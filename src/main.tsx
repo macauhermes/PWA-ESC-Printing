@@ -704,7 +704,7 @@ function App() {
       setLocalDrafts(old => [draft, ...old]);
       clearWorkForm();
       setMessage(remoteOnline
-        ? `事件 ${draft.eventCode} 已加入上傳隊列，依事件編號順序上傳；你可以繼續建立新事件。`
+        ? `事件 ${draft.eventCode} 已加入上傳隊列，將按派發序號順序上傳；你可以繼續建立新事件。`
         : `事件 ${draft.eventCode} 已加入上傳隊列，正在立即嘗試上傳；若網絡中斷會保留並自動重試。`);
       // Always kick the queue immediately. If another event is uploading,
       // the scheduler leaves this item queued; completion starts the next one.
@@ -779,8 +779,8 @@ function App() {
     } catch (err) { setMessage(err instanceof Error ? err.message : '保存取消狀態失敗，請重試。'); }
   }
   async function continueLocalWork(draft: LocalDraft) {
-    const queued = { ...draft, uploadDispatchSeq: await nextUploadDispatchSequence(), syncStatus:'queued' as const };
     try {
+      const queued = { ...draft, uploadDispatchSeq: await nextUploadDispatchSequence(), syncStatus:'queued' as const };
       await saveLocalDraft(queued);
       localDraftsRef.current = localDraftsRef.current.map(item => item.id === draft.id ? queued : item);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));

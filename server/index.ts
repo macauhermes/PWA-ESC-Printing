@@ -23,6 +23,8 @@ if (adminUsername) {
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
+const appVersion = String(process.env.APP_VERSION || (JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')) as { version?: string }).version || '0.1.1');
+const appEnvironment = String(process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'production' : 'test'));
 const origin = process.env.APP_ORIGIN || 'http://localhost:5173';
 const rpID = process.env.RP_ID || new URL(origin).hostname;
 const rpName = process.env.RP_NAME || 'PWA ESC Printing';
@@ -93,6 +95,7 @@ const takeChallenge = (cid: string, kind: string) => {
 };
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'PWA ESC Printing API' }));
+app.get('/api/version', (_req, res) => res.set('Cache-Control', 'no-store').json({ version: appVersion, environment: appEnvironment }));
 app.get('/api/config', (_req, res) => res.json({ rpName, rpID, origin, vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '' }));
 
 // Public passkey enrollment for ordinary users. The env-configured administrator is password-only.
@@ -380,7 +383,7 @@ const upload = multer({ storage, limits: { fileSize: 250 * 1024 * 1024, files: 2
 app.get('/api/work', auth, (req: any, res) => {
   const clientId = String(req.user.client_id || '').slice(0, 128);
   if (!clientId) return res.status(409).json({ error: '客戶端尚未初始化；請等待裝置心跳完成後再載入工作記錄。' });
-  const rows = db.prepare(`SELECT id,client_id AS clientId,user_id AS userId,username,title,content,event_date AS eventDate,created_at AS createdAt,printer_name AS printerName,event_code AS eventCode FROM client_work WHERE client_id=? AND datetime(created_at)>datetime('now','-24 hours') ORDER BY created_at DESC`).all(clientId) as any[];
+  const rows = db.prepare(`SELECT id,client_id AS clientId,user_id AS userId,username,title,content,event_date AS eventDate,created_at AS createdAt,printer_name AS printerName,event_code AS eventCode FROM client_work WHERE client_id=? ORDER BY created_at DESC`).all(clientId) as any[];
   const media = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   res.json(rows.map(w => ({ ...w, media: media.filter(m => m.workId === w.id).map(m => ({ ...m, url: '/uploads/' + m.filename })) })));
 });

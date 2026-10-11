@@ -115,7 +115,7 @@ app.post('/api/auth/register/options', async (req, res) => {
   if (existing.length > 0) return res.status(409).json({ error: '此帳號已註冊 Passkey，請直接登入。' });
   const existingEmployee = db.prepare('SELECT username FROM users WHERE employee_number=? AND username<>?').get(employeeNumber, username) as any;
   if (existingEmployee) return res.status(409).json({ error: '此員工編號已註冊，請聯絡管理員。' });
-  const displayName = employeeName || username;
+  const displayName = username;
   if (user) {
     db.prepare('UPDATE users SET display_name=?,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?')
       .run(username, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, user.id);

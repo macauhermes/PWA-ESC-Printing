@@ -288,3 +288,6 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 .queue-actions{margin-top:10px;gap:8px;}
 .queue-actions button{flex:0 1 auto;min-width:104px;}
+
+.receipt-preview-popup{width:min(100%,420px)}
+.receipt-preview-popup .receipt-preview{max-width:100%;box-sizing:border-box;margin:0 auto 4px}

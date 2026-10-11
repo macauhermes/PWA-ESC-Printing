@@ -112,3 +112,16 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
   .storage-tooltip{position:absolute;right:0;top:calc(100% + 5px);z-index:50;padding:7px 10px;border-radius:7px;background:#fff;color:#111827 !important;border:1px solid #94a3b8;box-shadow:0 4px 12px #0002;font-size:11px;font-weight:600;white-space:nowrap;text-align:right}
   .registration-fields{margin-top:8px}
 }
+
+/* Mobile metadata alignment: system details left, user and storage right. */
+@media(max-width:600px){
+  .mobile-header-meta{display:flex;width:100%;justify-content:space-between;align-items:center;flex-wrap:nowrap;gap:8px;text-align:initial}
+  .mobile-header-system{display:flex;align-items:center;justify-content:flex-start;gap:0;min-width:0;flex:1 1 auto;white-space:nowrap}
+  .mobile-header-system>span:not(:last-child)::after{content:"　";white-space:pre}
+  .mobile-header-user{position:relative;display:flex;align-items:center;justify-content:flex-end;gap:0;flex:0 0 auto;margin-left:auto;white-space:nowrap}
+  .mobile-header-user .mobile-username::after{content:"　";white-space:pre}
+  .mobile-header-user .storage-label{margin:0;white-space:nowrap}
+  .mobile-header-user .storage-label::after{content:"　";white-space:pre}
+  .mobile-header-user .storage-meter{flex:0 0 42px}
+  .mobile-header-user .storage-tooltip{right:0}
+}

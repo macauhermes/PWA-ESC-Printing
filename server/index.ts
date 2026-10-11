@@ -553,6 +553,18 @@ app.post('/api/work', auth, upload.array('media', 20), (req: any, res) => {
     for (const file of files) try { fs.unlinkSync(file.path); } catch {}
     return res.status(400).json({ error: '事件標題不可為空' });
   }
+  // eventCode is the client-generated idempotency key: if the final response was
+  // lost during a disconnect, a retry must not create a second event.
+  const existing = eventCode ? db.prepare('SELECT id,client_id AS clientId,title,content,event_date AS eventDate,created_at AS createdAt,printer_name AS printerName,event_code AS eventCode FROM client_work WHERE client_id=? AND event_code=? ORDER BY created_at DESC LIMIT 1').get(clientId,eventCode) as any : null;
+  if (existing) {
+    for (const file of files) try { fs.unlinkSync(file.path); } catch {}
+    for (const { mediaId, item } of chunkedFiles) {
+      try { fs.unlinkSync(path.join(uploadDir,item.filename)); } catch {}
+      completedWorkUploads.delete(mediaId);
+    }
+    const mediaCount = Number((db.prepare('SELECT COUNT(*) AS count FROM work_media WHERE work_id=?').get(existing.id) as {count:number}).count || 0);
+    return res.status(200).json({ ...existing, mediaCount, alreadyExists:true });
+  }
   const workId = id();
   const printerName = (db.prepare('SELECT printer_name FROM client_status WHERE client_id=?').get(clientId) as { printer_name?: string } | undefined)?.printer_name || null;
   const transaction = db.transaction(() => {

@@ -943,3 +943,14 @@ API 應按領域分組，至少涵蓋：
   - [ ] 點擊「預覽」才顯示收據 overlay。
   - [ ] overlay 可透過點擊外部或關閉按鈕關閉。
   - [ ] 打印頁面不再固定顯示下方的收據預覽。
+
+## 32. iPhone 縮放行為及 Passkey 本機驗證器偏好
+
+- `index.html` 的 viewport 保留 `width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover`；但現代 iOS Safari 可能忽略禁止手動縮放的設定，不可宣稱可透過 CSS 完全鎖定 pinch zoom。
+- 手機版 `input`、`textarea`、`select` 使用至少 16px 字體，避免 iOS Safari 聚焦小字輸入框時自動放大頁面。
+- Passkey 註冊選項優先提示本機驗證器（`preferredAuthenticatorType: 'localDevice'`），讓 iPhone 優先使用本機 Face ID／裝置驗證器，而不是一開始便引導至跨裝置 QR／NFC 流程。
+- 這是瀏覽器提示，不保證所有環境都只顯示本機選項。若帳戶現有 Passkey 原本存於另一台裝置，iPhone 登入時仍可能要求使用該裝置；需要確認網站 hostname 與 `RP_ID` 一致，且 iPhone 本機已建立對應網站的 Passkey。
+- 驗收：
+  - [ ] 手機輸入欄聚焦時不因字體小於 16px 而觸發 Safari 自動放大。
+  - [ ] 新 Passkey 註冊優先提示本機驗證器。
+  - [ ] 文件清楚說明 iOS 手動縮放可能無法被網站完全禁止，以及跨裝置 Passkey 的限制。

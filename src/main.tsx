@@ -616,7 +616,7 @@ function App() {
   }
   function isConnectivityFailure(error: unknown) {
     const text = error instanceof Error ? error.message : String(error || '');
-    return /網絡連線中斷|Failed to fetch|NetworkError|Load failed|HTTP 5\d\d|連線逾時/i.test(text);
+    return /網絡連線中斷|Failed to fetch|NetworkError|Load failed|HTTP 5\d\d|HTTP 408|HTTP 429|連線逾時|附件上傳逾時/i.test(text);
   }
   async function uploadCurrentWork() {
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }

@@ -10,14 +10,15 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 
 /* Event date/time input sizing and attachment upload feedback */
-.event-date-field{min-width:0;width:100%;}
-.event-datetime-input{display:block;width:100%;max-width:100%;min-width:0;box-sizing:border-box;text-align:left;text-align-last:left;direction:ltr;font-size:16px;padding:10px 8px;}
-.event-datetime-input::-webkit-date-and-time-value{text-align:left;}
+.event-date-field{display:block;min-width:0;width:100%;}
+.event-date-field .event-datetime-input{display:block;width:100%;max-width:100%;min-width:0;min-height:44px;height:44px;box-sizing:border-box;appearance:none;-webkit-appearance:none;text-align:left;text-align-last:left;direction:ltr;font-family:inherit;font-size:16px;line-height:normal;padding:10px 12px;margin:7px 0 0;border:1px solid #d1d8e4;border-radius:9px;background:#fff;color:#111827;}
+.event-datetime-input::-webkit-date-and-time-value{display:inline-block;width:100%;min-height:1.2em;text-align:left;padding:0;margin:0;}
+.event-datetime-input::-webkit-calendar-picker-indicator{margin:0;padding:0;}
 .upload-progress{margin:12px 0;padding:12px;border:1px solid #bfdbfe;border-radius:10px;background:#eff6ff;color:#1e3a8a;min-width:0;}
 .upload-progress-heading,.upload-progress-details{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px;}
 .upload-progress progress{display:block;width:100%;height:10px;margin:9px 0;accent-color:#2563eb;}
 .upload-progress-details{color:#475569;font-size:12px;}
-@media(max-width:600px){.event-datetime-input{padding:10px 6px;font-size:16px;letter-spacing:-.2px;}.upload-progress-heading,.upload-progress-details{align-items:flex-start;}}
+@media(max-width:600px){.event-date-field .event-datetime-input{padding:10px 12px;font-size:16px;letter-spacing:0;}.upload-progress-heading,.upload-progress-details{align-items:flex-start;}}
 
 
 /* Device connection indicator, event retention countdown, and event identifiers */
@@ -100,14 +101,14 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 /* Compact mobile metadata row, full-width Chinese separators, and storage usage meter. */
 @media(max-width:600px){
-  .mobile-header-meta{position:relative;gap:0 0;align-items:center}
-  .mobile-header-meta>span:not(.storage-tooltip)::after{content:"　";white-space:pre}
+  .mobile-header-meta{position:relative;width:100%;justify-content:flex-end;gap:0;align-items:center;text-align:right}
+  .mobile-header-meta>span:not(.storage-tooltip):not(.storage-label)::after{content:"　";white-space:pre}.mobile-header-meta .storage-label{margin-left:0;color:#fff;white-space:nowrap}.mobile-header-meta .storage-label::after{content:"　";white-space:pre}
   .mobile-header-meta .device-code-meta{color:#8fa8c9}
   .storage-meter{position:relative;display:inline-flex;align-items:center;flex:0 0 42px;width:42px;height:22px;min-height:22px;padding:0;margin:0 2px;border:0;border-radius:0;background:transparent;overflow:visible;vertical-align:middle;appearance:none;-webkit-appearance:none}
-  .storage-meter::before{content:"";position:absolute;left:0;right:0;top:50%;height:5px;transform:translateY(-50%);border-radius:999px;background:#dbe4f0}
-  .storage-meter-fill{position:absolute;left:0;top:50%;z-index:1;display:block;height:5px;transform:translateY(-50%);border-radius:999px;background:#7aa6d8}
+  .storage-meter::before{content:"";position:absolute;left:0;right:0;top:50%;height:7px;transform:translateY(-50%);border:1px solid #94a3b8;border-radius:999px;background:#f8fafc;box-shadow:inset 0 0 0 1px #e2e8f0}
+  .storage-meter-fill{position:absolute;left:2px;top:50%;z-index:1;display:block;height:3px;transform:translateY(-50%);border-radius:999px;background:#7aa6d8}
   .storage-meter.warning .storage-meter-fill{background:#b86d24}
   .storage-meter.critical .storage-meter-fill{background:#dc2626}
-  .storage-tooltip{position:absolute;right:0;top:calc(100% + 5px);z-index:50;padding:7px 10px;border-radius:7px;background:#f8fafc;color:#172033;border:1px solid #cbd5e1;box-shadow:0 4px 12px #0002;font-size:11px;font-weight:600;white-space:nowrap}
+  .storage-tooltip{position:absolute;right:0;top:calc(100% + 5px);z-index:50;padding:7px 10px;border-radius:7px;background:#fff;color:#111827 !important;border:1px solid #94a3b8;box-shadow:0 4px 12px #0002;font-size:11px;font-weight:600;white-space:nowrap;text-align:right}
   .registration-fields{margin-top:8px}
 }

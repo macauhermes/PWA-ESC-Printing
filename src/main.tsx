@@ -346,7 +346,7 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [mediaViewer]);
 
-  useEffect(() => { if (token) api('/me', token).then((x) => { setUser(x.user); if (x.user.role === 'admin') setTab('users'); }).catch(() => { localStorage.removeItem('esc-token'); setToken(''); setUser(null); setTab('print'); }); }, [token]);
+  useEffect(() => { if (token) api('/me', token).then((x) => { setUser(x.user); if (x.user.role === 'admin') setTab('registered-devices'); }).catch(() => { localStorage.removeItem('esc-token'); setToken(''); setUser(null); setTab('print'); }); }, [token]);
   useEffect(() => {
     const query = window.matchMedia('(min-width: 801px)');
     const update = () => { setIsDesktop(query.matches); if (!query.matches) setAdminMode(false); };

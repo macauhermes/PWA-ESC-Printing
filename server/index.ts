@@ -271,6 +271,7 @@ app.post('/api/client/heartbeat', auth, (req: any, res) => {
   if (req.user.client_id && req.user.client_id !== clientId) return res.status(403).json({ error: 'Client session mismatch' });
   if (!req.user.client_id) db.prepare('UPDATE sessions SET client_id=? WHERE token_hash=?').run(clientId, req.user.token_hash);
   const body = req.body || {};
+  db.prepare('INSERT INTO user_devices(user_id,client_id) VALUES(?,?) ON CONFLICT(user_id,client_id) DO UPDATE SET last_seen=CURRENT_TIMESTAMP').run(req.user.id, clientId);
   db.prepare(`INSERT INTO client_status(client_id,user_id,username,online,bluetooth_supported,bluetooth_connected,printer_connected,printer_name,printer_id,user_agent,app_version,app_environment,last_seen)
     VALUES(?,?,?,1,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
     ON CONFLICT(client_id) DO UPDATE SET user_id=excluded.user_id,username=excluded.username,online=1,

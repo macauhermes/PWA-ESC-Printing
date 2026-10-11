@@ -274,7 +274,7 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 
 /* Per-attachment upload progress, displayed under each attachment row. */
-.attachment-progress-item{min-width:0;width:100%;margin:5px 0 9px;}
+.attachment-progress-item{min-width:0;width:100%;margin:0;padding:0;}
 .attachment-progress-item .attachment-row{margin:0;}
 .attachment-progress-track{height:5px;width:100%;margin-top:5px;overflow:hidden;border-radius:999px;background:#e2e8f0;}
 .attachment-progress-fill{display:block;height:100%;border-radius:999px;background:#2563eb;transition:width .15s linear;}

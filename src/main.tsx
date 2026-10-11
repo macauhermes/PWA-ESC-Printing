@@ -11,8 +11,8 @@ type AdminClient = { clientId:string; userId:string; username:string; online:num
 type AdminUser = { id:string; username:string; displayName:string; role:string; createdAt:string; passkeyCount:number; activeSessions:number; lastLogin?:string };
 type AdminOperation = { id:number; username?:string; action:string; entity_type?:string; entity_id?:string; detail?:string; created_at:string };
 type WorkMedia = { id?:string; kind:string; originalName:string; mimeType:string; url?:string; name?:string; size?:number; blob?:Blob };
-type DeviceWork = { id:string; clientId:string; userId:string; username:string; title:string; content:string; eventDate?:string|null; createdAt:string; printerName?:string|null; media?:WorkMedia[] };
-type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string; media:WorkMedia[] };
+type DeviceWork = { id:string; clientId:string; userId:string; username:string; title:string; content:string; eventDate?:string|null; createdAt:string; printerName?:string|null; eventCode?:string|null; media?:WorkMedia[] };
+type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string; eventCode:string; syncStatus?:'draft'|'queued'|'uploading'|'failed'; media:WorkMedia[] };
 type MediaViewer = { src:string; kind:'image'|'video'; name:string; revokeOnClose:boolean };
 type UploadProgress = { loaded:number; total:number; percent:number|null; bytesPerSecond:number };
 type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; operations:AdminOperation[]; jobs:Job[]; deviceWork:DeviceWork[]; serverTime:string };
@@ -81,6 +81,42 @@ async function savePrinterLocally(value: SavedPrinter) {
   });
   db.close();
 }
+async function nextLocalEventSequence(): Promise<number> {
+  const db = await printerStore();
+  const value = await new Promise<number>((resolve, reject) => {
+    const tx = db.transaction('preferences', 'readwrite');
+    const store = tx.objectStore('preferences');
+    const request = store.get('event-sequence');
+    let next = 1;
+    request.onsuccess = () => { next = Number(request.result?.value || 0) + 1; store.put({ id:'event-sequence', value:next }); };
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve(next);
+    tx.onerror = () => reject(tx.error);
+  });
+  db.close();
+  return value;
+}
+function makeEventCode(sequence: number, deviceCode: string, date = new Date()) {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = String(date.getFullYear());
+  return `${String(sequence).padStart(4, '0')}-${deviceCode}-${day}${month}${year}`;
+}
+const DAY_MS = 24 * 60 * 60 * 1000;
+function timestampMs(value: string | undefined) {
+  if (!value) return 0;
+  const normalized = value.includes('T') || /Z$|[+-]\\d\\d:\\d\\d$/.test(value) ? value : value.replace(' ', 'T') + 'Z';
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+function remainingMs(createdAt: string, now: number) { return Math.max(0, DAY_MS - (now - timestampMs(createdAt))); }
+function countdownLabel(createdAt: string, now: number) {
+  const ms = remainingMs(createdAt, now);
+  const hours = Math.floor(ms / 3600000);
+  const minutes = Math.floor(ms % 3600000 / 60000);
+  const seconds = Math.floor(ms % 60000 / 1000);
+  return { label: ms <= 0 ? '已到期' : `剩餘 ${String(hours).padStart(2,'0')}:${String(minutes).padStart(2,'0')}:${String(seconds).padStart(2,'0')}`, percent: Math.max(0, ms / DAY_MS * 100), expired: ms <= 0 };
+}
 async function saveLocalDraft(value: LocalDraft) {
   const db = await printerStore();
   await new Promise<void>((resolve, reject) => { const tx = db.transaction('workDrafts', 'readwrite'); tx.objectStore('workDrafts').put(value); tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
@@ -127,6 +163,9 @@ function App() {
   const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
   const [workMedia, setWorkMedia] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [deviceCode, setDeviceCode] = useState(() => localStorage.getItem('esc-device-code') || '');
+  const [remoteOnline, setRemoteOnline] = useState(false);
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const [uploadedWork, setUploadedWork] = useState<DeviceWork[]>([]);
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
   const [workTitle, setWorkTitle] = useState('');
@@ -181,6 +220,27 @@ function App() {
     update();
     query.addEventListener?.('change', update);
     return () => query.removeEventListener?.('change', update);
+  }, []);
+  useEffect(() => {
+    let active = true;
+    const check = async () => {
+      try {
+        const response = await fetch('/api/health', { cache: 'no-store' });
+        if (!response.ok) throw new Error('API unavailable');
+        if (active) setRemoteOnline(true);
+      } catch { if (active) setRemoteOnline(false); }
+    };
+    void check();
+    const timer = window.setInterval(check, 5000);
+    const onOnline = () => void check();
+    const onOffline = () => setRemoteOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('online', onOnline); window.removeEventListener('offline', onOffline); };
+  }, []);
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
     if (!token || !user) return;
@@ -238,13 +298,14 @@ function App() {
     if (!token || !user) return;
     const report = async () => {
       try {
-        await api('/client/heartbeat', token, { method: 'POST', body: JSON.stringify({
+        const heartbeat = await api('/client/heartbeat', token, { method: 'POST', body: JSON.stringify({
           clientId, userAgent: navigator.userAgent, bluetoothSupported: 'bluetooth' in navigator,
           bluetoothConnected: Boolean(printer?.device?.gatt?.connected),
           printerConnected: Boolean(printer?.characteristic && printer.device.gatt?.connected),
           printerName: printer?.name || savedPrinter?.device_name || '',
           printerId: printer?.id || savedPrinter?.device_id || ''
         }) });
+        if (heartbeat.deviceCode) { localStorage.setItem('esc-device-code', heartbeat.deviceCode); setDeviceCode(heartbeat.deviceCode); }
       } catch (err) {
         const msg = err instanceof Error ? err.message : '';
         if (msg.includes('401') || msg.includes('Session expired') || msg.includes('Authentication required')) {
@@ -311,6 +372,7 @@ function App() {
       const { challengeId, username: loginName, ...publicKey } = options;
       const response = await startAuthentication({ optionsJSON: publicKey });
       const result = await fetch('/api/auth/login/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: loginName, challengeId, response, clientId }) }).then(async r => { const x = await r.json(); if (!r.ok) throw new Error(x.error); return x; });
+      if (result.deviceCode) { localStorage.setItem('esc-device-code', result.deviceCode); setDeviceCode(result.deviceCode); }
       localStorage.setItem('esc-token', result.token); setToken(result.token); setUser(result.user); setMessage('登入成功');
     } catch (e) { setMessage(e instanceof Error ? e.message : '登入失敗'); }
     finally { setBusy(false); }
@@ -334,8 +396,9 @@ function App() {
       const options = await fetch('/api/auth/register/options', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, displayName: displayName || username }) }).then(async r => { const x = await r.json(); if (!r.ok) throw new Error(x.error); return x; });
       const { challengeId, userId, ...publicKey } = options;
       const response = await startRegistration({ optionsJSON: publicKey });
-      const result = await fetch('/api/auth/register/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, challengeId, response }) }).then(async r => { const x = await r.json(); if (!r.ok) throw new Error(x.error); return x; });
-      setMessage(result.verified ? 'Passkey 註冊成功，現在可以登入。' : '註冊未完成');
+      const result = await fetch('/api/auth/register/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, challengeId, response, clientId }) }).then(async r => { const x = await r.json(); if (!r.ok) throw new Error(x.error); return x; });
+      if (result.deviceCode) { localStorage.setItem('esc-device-code', result.deviceCode); setDeviceCode(result.deviceCode); }
+      setMessage(result.verified ? `Passkey 註冊成功，設備碼：${result.deviceCode || '待同步'}。現在可以登入。` : '註冊未完成');
     } catch (e) { setMessage(e instanceof Error ? e.message : '註冊失敗'); }
     finally { setBusy(false); }
   }
@@ -523,18 +586,33 @@ function App() {
     } catch (e) { setMessage(e instanceof Error ? e.message : '推播訂閱失敗'); }
   }
 
+  useEffect(() => {
+    if (!localDrafts.length) return;
+    const expired = localDrafts.filter(draft => remainingMs(draft.createdAt, clockNow) <= 0);
+    if (!expired.length) return;
+    setLocalDrafts(current => current.filter(draft => remainingMs(draft.createdAt, clockNow) > 0));
+    void Promise.all(expired.map(draft => deleteLocalDraft(draft.id).catch(() => {})));
+  }, [clockNow, localDrafts]);
+  useEffect(() => {
+    if (!remoteOnline || !token || !user || busy) return;
+    const timer = window.setInterval(() => {
+      const queued = localDrafts.find(draft => draft.syncStatus === 'queued' && remainingMs(draft.createdAt, Date.now()) > 0);
+      if (queued) void uploadLocalWork(queued);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [remoteOnline, token, user, busy, localDrafts]);
   const tabs = useMemo(() => {
     const base: [string,string][] = user?.role === 'admin'
       ? [['notifications', '通知'], ['users', '用戶管理'], ['device-work', '設備工作記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]
       : [['print', '打印'], ['notifications', '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')], ['events', '事件管理']];
     return base;
   }, [user?.role, notifications]);
-  if (!user) return <main className="auth-shell"><section className="panel auth-panel"><div className="brand">ESC <span>PRINTING</span></div><h1>PWA ESC Printing</h1>
+  if (!user) return <><div className={`remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端已連線' : '遠端未連線'} </div><main className="auth-shell"><section className="panel auth-panel"><div className="brand">ESC <span>PRINTING</span></div><h1>PWA ESC Printing</h1>
     {isDesktop && <div className="actions"><button className={adminMode ? 'secondary' : ''} onClick={() => { setAdminMode(false); setMessage(''); }}>一般用戶</button><button className={adminMode ? '' : 'secondary'} onClick={() => { setAdminMode(true); setMessage(''); }}>管理員登入</button></div>}
     {adminMode && isDesktop ? <><p className="muted">管理員請使用伺服器 .env 設定的固定帳號及密碼登入。</p><label>管理員帳號<input value={adminUsernameInput} onChange={e => setAdminUsernameInput(e.target.value)} autoComplete="username" /></label><label>管理員密碼<input type="password" value={adminPasswordInput} onChange={e => setAdminPasswordInput(e.target.value)} autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter' && adminUsernameInput && adminPasswordInput && !busy) void adminLogin(); }} /></label><button className="full" disabled={busy || !adminUsernameInput || !adminPasswordInput} onClick={() => void adminLogin()}>{busy ? '登入中…' : '管理員登入'}</button></> : <><p className="muted">一般用戶使用 Passkey 安全登入。任何人均可自行註冊，不需要管理員批准。</p><label>使用者名稱<input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" placeholder="例如：operator01" /></label><label>顯示名稱（首次註冊）<input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="操作人員" /></label><div className="actions"><button disabled={busy || !username} onClick={login}>{busy ? '處理中…' : 'Passkey 登入'}</button><button className="secondary" disabled={busy || !username} onClick={register}>註冊 Passkey</button></div><p className="hint">首次使用請先註冊 Passkey。管理員帳號僅能透過桌面版的固定帳密登入。</p></>}
-    {message && <p className="notice">{message}</p>}</section></main>;
+    {message && <p className="notice">{message}</p>}</section></main></>;
 
-  return <div className="app-shell"><header className="topbar"><div><div className="brand">ESC <span>PRINTING</span></div><small>收據打印 · 事件 · 稽核</small></div><div className="account"><span>{user.displayName || user.username}</span><button className="secondary compact" onClick={logout}>登出</button></div></header>
+  return <div className="app-shell"><header className="topbar"><div><div className="brand">ESC <span>PRINTING</span></div><small>收據打印 · 事件 · 稽核</small></div><div className="account"><span>{user.displayName || user.username}</span>{user.role !== 'admin' && <span className="device-code">設備碼 {deviceCode || '同步中'}</span>}<button className="secondary compact" onClick={logout}>登出</button><span className={`remote-status inline ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端連線' : '遠端離線'}</span></div></header>
     <nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'tab active' : 'tab'} onClick={() => { setTab(key); setMessage(''); }}>{label}</button>)}</nav>
     <main className="content">
       {message && <div className="notice" role="status">{message}<button className="notice-close" onClick={() => setMessage('')}>×</button></div>}

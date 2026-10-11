@@ -212,7 +212,7 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 .work-event-card:first-child{margin-top:8px;}
 .work-event-card .list-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
 .work-event-card .list-heading strong{min-width:0;overflow-wrap:anywhere;}
-.attachment-row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;padding:8px 0;border-bottom:1px solid var(--border,#e5e7eb);}
+.attachment-row{display:flex;align-items:baseline;justify-content:flex-start;gap:5px;min-width:0;padding:0;margin:0;border:0;}
 .attachment-row:last-child{border-bottom:0;}
 .attachment-name{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;font-size:13px;}
 .attachment-open{flex:1 1 auto;min-width:0;text-align:left;overflow-wrap:anywhere;}

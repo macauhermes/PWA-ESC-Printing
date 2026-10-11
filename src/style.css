@@ -37,3 +37,5 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 @media(max-width:600px){.remote-status:not(.inline){top:8px;right:8px;padding:6px 9px;font-size:11px}.topbar{padding-top:46px}.account{flex-wrap:wrap;justify-content:flex-end}.device-code{font-size:11px}.remote-status.inline{max-width:100%;white-space:nowrap}}
 
 .global-upload-progress{position:sticky;top:0;z-index:9000;width:min(900px,calc(100% - 24px));margin:8px auto;box-shadow:0 8px 24px rgba(15,23,42,.14)}
+
+.account .device-code{display:inline}.account .remote-status{display:inline-flex}

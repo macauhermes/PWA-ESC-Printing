@@ -11,6 +11,7 @@ db.pragma('foreign_keys = ON');
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, display_name TEXT NOT NULL,
+  employee_number TEXT, employee_name TEXT, contact_phone TEXT, contact_email TEXT,
   role TEXT NOT NULL DEFAULT 'user', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS passkeys (
@@ -84,6 +85,13 @@ CREATE TABLE IF NOT EXISTS client_status (
 CREATE INDEX IF NOT EXISTS idx_client_status_last_seen ON client_status(last_seen DESC);
 CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL);
 `);
+
+const userColumns = db.pragma('table_info(users)') as { name: string }[];
+if (!userColumns.some(c => c.name === 'employee_number')) db.exec('ALTER TABLE users ADD COLUMN employee_number TEXT');
+if (!userColumns.some(c => c.name === 'employee_name')) db.exec('ALTER TABLE users ADD COLUMN employee_name TEXT');
+if (!userColumns.some(c => c.name === 'contact_phone')) db.exec('ALTER TABLE users ADD COLUMN contact_phone TEXT');
+if (!userColumns.some(c => c.name === 'contact_email')) db.exec('ALTER TABLE users ADD COLUMN contact_email TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_employee_number ON users(employee_number) WHERE employee_number IS NOT NULL');
 
 const workColumns = db.pragma('table_info(client_work)') as { name: string }[];
 if (!workColumns.some(c => c.name === 'printer_name')) db.exec('ALTER TABLE client_work ADD COLUMN printer_name TEXT');

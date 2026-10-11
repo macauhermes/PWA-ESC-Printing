@@ -294,3 +294,7 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 /* Keep iOS form controls at 16px to prevent Safari's automatic focus zoom. This does not disable pinch zoom. */
 @media(max-width:600px){input,textarea,select{font-size:16px!important;}}
+
+
+/* Profile forms and registered-device administration */
+.admin-profile-details{margin-top:8px;min-width:220px;max-width:360px}.admin-profile-details summary{cursor:pointer;color:#1d4ed8;font-size:12px;font-weight:650;padding:6px 0}.admin-profile-details form{padding:10px;border:1px solid #e4e8f0;border-radius:10px;background:#f8fafc}.admin-profile-details label{font-size:12px}.admin-profile-details input{font-size:16px;padding:9px}.registered-device-user{padding:8px 0;border-bottom:1px solid #edf0f5;min-width:180px}.registered-device-user:last-child{border-bottom:0}.registered-device-user small{display:block;color:#667085;margin-top:3px}.admin-layout details summary{overflow-wrap:anywhere}

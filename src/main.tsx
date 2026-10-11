@@ -898,21 +898,21 @@ function App() {
 
   async function forceCleanupLocalRecords() {
     const removable = localDraftsRef.current.filter(draft =>
-      (!draft.syncStatus || draft.syncStatus === 'draft' || draft.syncStatus === 'cancelled') &&
+      (!draft.syncStatus || draft.syncStatus === 'draft') &&
       !uploadingLocalWorkIds.current.has(draft.id) &&
       !uploadControllers.current.has(draft.id)
     );
     if (!removable.length) {
-      setMessage('沒有可強制清理的手機暫存或已取消上傳記錄；排程中、上傳中及失敗記錄均會保留。');
+      setMessage('沒有可強制清理的手機暫存記錄；已取消上傳、排程中、上傳中及失敗記錄均會保留。');
       return;
     }
-    if (!window.confirm(`強制清理 ${removable.length} 筆手機暫存／已取消上傳事件及其本機附件？此操作無法復原；不會刪除後台已上傳事件，也不會清除仍在排程、上傳中或失敗的事件。`)) return;
+    if (!window.confirm(`強制清理 ${removable.length} 筆手機暫存事件及其本機附件？此操作無法復原；已取消上傳記錄、排程中、上傳中、失敗及後台已上傳事件均不會被清除。`)) return;
     try {
       for (const draft of removable) await deleteLocalDraft(draft.id);
       const removedIds = new Set(removable.map(draft => draft.id));
       localDraftsRef.current = localDraftsRef.current.filter(draft => !removedIds.has(draft.id));
       setLocalDrafts(old => old.filter(draft => !removedIds.has(draft.id)));
-      setMessage(`已強制清理 ${removable.length} 筆手機暫存／已取消上傳記錄及其附件。`);
+      setMessage(`已強制清理 ${removable.length} 筆手機暫存記錄及其附件；已取消上傳記錄已保留。`);
     } catch (err) {
       const remaining = await loadLocalDrafts().catch(() => localDraftsRef.current);
       localDraftsRef.current = remaining;
@@ -1111,7 +1111,7 @@ function App() {
           {workMedia.map((file,i)=>{const key=formAttachmentKey(file,i);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={key}><div className="attachment-row"><span className="attachment-name">{file.type.startsWith('video/') || /\.(mov|mp4|m4v|3gp|3g2|webm|mkv|avi|mts|m2ts)$/i.test(file.name)?'影片':'圖片'}：{file.name}（{(file.size/1024/1024).toFixed(1)} MB）</span><button type="button" className="attachment-remove-button" disabled={workSubmitting} aria-label={`移除附件 ${file.name}`} onClick={()=>removeSelectedAttachment(i)}>移除</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}<div className="actions"><button type="submit" disabled={workSubmitting || !workTitle.trim()}>暫存於手機</button><button type="button" disabled={workSubmitting || !workTitle.trim()} onClick={()=>void uploadCurrentWork()}>上傳至後台</button></div></form>
           <p className="hint">手機暫存只保存在目前瀏覽器／裝置；清除網站資料或更換裝置可能導致暫存遺失。暫存內容不會出現在後台，直到按下「上傳系統」。</p>
         </article>
-        <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div><button type="button" className="danger compact" onClick={()=>void forceCleanupLocalRecords()}>強制清理暫存及已取消記錄</button></div>
+        <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div><button type="button" className="danger compact" onClick={()=>void forceCleanupLocalRecords()}>強制清除暫存記錄</button></div>
           {!localDrafts.some(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">尚無 24 小時內的已暫存事件。</p> : localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · 尚未上傳</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions"><button disabled={busy} onClick={()=>void enqueueLocalDraftForUpload(draft)}>上傳至後台</button><button className="danger compact" disabled={busy} onClick={()=>void deleteLocalWork(draft.id)}>刪除暫存</button></div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(draft.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div></div>)}
         </article>
         <article className="panel"><div className="admin-heading"><div><h2>上傳隊列</h2><p className="muted">中斷或等待重試：{localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div></div>

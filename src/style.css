@@ -262,8 +262,15 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
   .mobile-header-user .storage-label-trigger{display:inline-flex!important;align-items:center;justify-content:center;padding:0!important;border:0!important;background:transparent!important;color:#fff!important;font:inherit!important;line-height:1!important;white-space:nowrap;cursor:pointer;min-height:0!important;box-shadow:none!important;}
   .mobile-header-user .storage-label-trigger:focus-visible,.mobile-header-user .storage-meter:focus-visible{outline:2px solid #bfdbfe!important;outline-offset:3px!important;}
 }
-.storage-popup-overlay{position:fixed;inset:0;z-index:10000;display:flex;align-items:flex-start;justify-content:center;padding:calc(env(safe-area-inset-top, 0px) + 76px) 16px 16px;background:rgba(15,23,42,.24);}
-.storage-popup{max-width:calc(100vw - 32px);padding:12px 16px;border:1px solid #94a3b8;border-radius:10px;background:#fff;color:#1e293b;box-shadow:0 10px 32px rgba(15,23,42,.24);font-size:14px;font-weight:650;line-height:1.4;text-align:center;white-space:normal;overflow-wrap:anywhere;}
+.storage-popup-overlay{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;overflow-y:auto;box-sizing:border-box;padding:calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px);background:rgba(15,23,42,.38);}
+.storage-popup{width:min(100%,460px);max-width:calc(100vw - 32px);max-height:calc(100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 32px);overflow-y:auto;box-sizing:border-box;margin:0;padding:16px;border:1px solid #94a3b8;border-radius:14px;background:#fff;color:#1e293b;box-shadow:0 16px 44px rgba(15,23,42,.28);font-size:14px;font-weight:400;line-height:1.5;text-align:left;white-space:normal;overflow-wrap:anywhere;}
+.storage-popup .storage-capacity-heading{align-items:center;gap:10px;}
+.storage-popup .storage-capacity-heading strong{font-size:13px;}
+.storage-popup .storage-capacity-heading:first-child{margin-bottom:14px;}
+.storage-popup .storage-popup-close{flex:0 0 auto;min-width:32px;min-height:32px;padding:0;border:0;border-radius:8px;background:#f1f5f9;color:#334155;font-size:23px;line-height:1;cursor:pointer;}
+.storage-popup .storage-popup-close:focus-visible{outline:2px solid #2563eb;outline-offset:2px;}
+.storage-popup progress{accent-color:#2563eb;}
+.storage-popup small{margin-top:8px;}
 
 
 /* Per-attachment upload progress, displayed under each attachment row. */

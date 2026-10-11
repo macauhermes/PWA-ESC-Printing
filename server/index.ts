@@ -403,15 +403,32 @@ const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => cb(null, crypto.randomUUID() + path.extname(file.originalname).slice(0, 12))
 });
-const upload = multer({ storage, limits: { fileSize: 250 * 1024 * 1024, files: 20 }, fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/')) });
-// Chunked media upload keeps each request small enough for restrictive mobile/proxy body limits.
+const MEDIA_MIME_BY_EXTENSION:Record<string,string> = { '.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.gif':'image/gif','.webp':'image/webp','.avif':'image/avif','.heic':'image/heic','.heif':'image/heif','.bmp':'image/bmp','.tif':'image/tiff','.tiff':'image/tiff','.mp4':'video/mp4','.m4v':'video/x-m4v','.mov':'video/quicktime','.qt':'video/quicktime','.webm':'video/webm','.mkv':'video/x-matroska','.avi':'video/x-msvideo','.3gp':'video/3gpp','.3g2':'video/3gpp2','.mts':'video/mp2t','.m2ts':'video/mp2t','.mpeg':'video/mpeg','.mpg':'video/mpeg','.ogv':'video/ogg' };
+function resolveMediaMimeType(originalName:string, suppliedMimeType:string) {
+  const type = String(suppliedMimeType || '').toLowerCase().split(';')[0].trim();
+  if (/^(image|video)\//.test(type)) return type;
+  const ext = path.extname(originalName).toLowerCase();
+  return MEDIA_MIME_BY_EXTENSION[ext] || '';
+}
+const upload = multer({ storage, limits: { fileSize: 250 * 1024 * 1024, files: 20 }, fileFilter: (_req, file, cb) => {
+  const resolved = resolveMediaMimeType(file.originalname,file.mimetype);
+  if (!resolved) return cb(new Error(`不支援的附件格式：${file.originalname}。請選擇常見圖片或影片格式。`));
+  (file as any).mimetype = resolved;
+  cb(null,true);
+} });
+// Keep each upload request comfortably below common 256 KiB reverse-proxy body limits.
 const chunkDir = path.join(uploadDir, '.chunks');
 fs.mkdirSync(chunkDir, { recursive: true });
-const chunkUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 190 * 1024, files: 1 } });
+const chunkUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 170 * 1024, files: 1 } });
 type CompletedWorkUpload = { userId:string; filename:string; originalName:string; mimeType:string; size:number; createdAt:number };
 const completedWorkUploads = new Map<string, CompletedWorkUpload>();
 function cleanupWorkUploads() {
   const cutoff = Date.now() - 2 * 60 * 60 * 1000;
+  for (const name of fs.readdirSync(chunkDir)) {
+    if (!name.endsWith('.part')) continue;
+    const tempPath = path.join(chunkDir,name);
+    try { if (fs.statSync(tempPath).mtimeMs < cutoff) fs.unlinkSync(tempPath); } catch {}
+  }
   for (const [mediaId, item] of completedWorkUploads) {
     if (item.createdAt < cutoff) {
       try { fs.unlinkSync(path.join(uploadDir, item.filename)); } catch {}
@@ -423,12 +440,12 @@ app.post('/api/work/chunk', auth, chunkUpload.single('chunk'), (req: any, res) =
   cleanupWorkUploads();
   const uploadId = String(req.body.uploadId || '');
   const originalName = String(req.body.filename || 'attachment').split(/[\\/]/).pop()!.slice(0, 255) || 'attachment';
-  const mimeType = String(req.body.mimeType || req.file?.mimetype || '').slice(0, 128);
+  const mimeType = resolveMediaMimeType(originalName,String(req.body.mimeType || req.file?.mimetype || '')).slice(0,128);
   const index = Number(req.body.index);
   const totalChunks = Number(req.body.totalChunks);
   const totalSize = Number(req.body.totalSize);
   const chunkSize = Number(req.body.chunkSize);
-  if (!/^[0-9a-f-]{36}$/i.test(uploadId) || !req.file || !Number.isInteger(index) || !Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 1600 || index < 0 || index >= totalChunks || !Number.isInteger(totalSize) || totalSize < 1 || totalSize > 250 * 1024 * 1024 || chunkSize !== 180 * 1024 || !/^(image|video)\//i.test(mimeType)) {
+  if (!/^[0-9a-f-]{36}$/i.test(uploadId) || !req.file || !Number.isInteger(index) || !Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 1600 || index < 0 || index >= totalChunks || !Number.isInteger(totalSize) || totalSize < 1 || totalSize > 250 * 1024 * 1024 || chunkSize !== 160 * 1024 || !/^(image|video)\//i.test(mimeType)) {
     return res.status(400).json({ error: '附件分段資料無效，請重新選擇影片或圖片後重試。' });
   }
   const tempPath = path.join(chunkDir, uploadId + '.part');
@@ -695,6 +712,11 @@ if (fs.existsSync(path.resolve('dist'))) {
 app.use((err: any, _req: any, res: any, _next: any) => {
   console.error('Unhandled request error:', err);
   if (res.headersSent) return;
+  if (err instanceof multer.MulterError) {
+    const tooLarge = err.code === 'LIMIT_FILE_SIZE';
+    return res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? '附件超過伺服器允許的 250 MiB 上限。' : `附件上傳限制：${err.message}` });
+  }
+  if (err instanceof Error && err.message.startsWith('不支援的附件格式：')) return res.status(415).json({ error: err.message });
   res.status(500).json({ error: '伺服器發生內部錯誤，請查看伺服器日誌。' });
 });
 

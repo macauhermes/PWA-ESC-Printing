@@ -12,7 +12,11 @@ type EventItem = { id: string; title: string; content: string; event_date?: stri
 type Job = { id: string; job_date: string; title: string; status: string; detail: string; created_at: string };
 type Printer = { id: string; name: string; device: BluetoothDevice; characteristic?: BluetoothRemoteGATTCharacteristic };
 type AdminClient = { clientId:string; userId:string; username:string; online:number; bluetoothSupported:number; bluetoothConnected:number; printerConnected:number; printerName?:string; printerId?:string; pushSubscribed?:number; userAgent?:string; appVersion?:string|null; appEnvironment?:string|null; lastSeen:string };
-type AdminUser = { id:string; username:string; displayName:string; role:string; createdAt:string; passkeyCount:number; activeSessions:number; lastLogin?:string };
+type AdminLinkedDevice = { clientId:string; deviceCode:string; registeredAt:string; lastSeen:string };
+type AdminUser = { id:string; username:string; displayName:string; employeeNumber?:string; employeeName?:string; contactPhone?:string; contactEmail?:string; role:string; createdAt:string; passkeyCount:number; activeSessions:number; lastLogin?:string; linkedDevices?:AdminLinkedDevice[] };
+type AdminDeviceUser = { id:string; username:string; displayName:string; registeredAt:string; lastSeen:string };
+type AdminDevice = { clientId:string; deviceCode:string; createdAt:string; online:number; lastSeen?:string; userAgent?:string; appVersion?:string|null; appEnvironment?:string|null; userCount:number; registeredUsers:AdminDeviceUser[] };
+type ProfileForm = { displayName:string; employeeNumber:string; employeeName:string; contactPhone:string; contactEmail:string };
 type AdminOperation = { id:number; username?:string; action:string; entity_type?:string; entity_id?:string; detail?:string; created_at:string };
 type WorkMedia = { id?:string; kind:string; originalName:string; mimeType:string; url?:string; name?:string; size?:number; blob?:Blob };
 type DeviceWork = { id:string; clientId:string; userId:string; username:string; title:string; content:string; eventDate?:string|null; createdAt:string; printerName?:string|null; eventCode?:string|null; media?:WorkMedia[] };
@@ -34,7 +38,7 @@ const formAttachmentKey = (file:File,index:number) => 'form:'+index+':'+file.nam
 const draftAttachmentKey = (draftId:string,index:number,file:WorkMedia) => 'draft:'+draftId+':'+index+':'+(file.name || file.originalName || 'attachment');
 type LocalStorageInfo = { quotaBytes:number; usageBytes:number; measured:boolean };
 const DEFAULT_STORAGE_LIMIT_BYTES = 5 * 1024 ** 3;
-type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; operations:AdminOperation[]; jobs:Job[]; deviceWork:DeviceWork[]; appVersion:string; appEnvironment:string; serverTime:string };
+type AdminDashboard = { users:AdminUser[]; clients:AdminClient[]; devices:AdminDevice[]; operations:AdminOperation[]; jobs:Job[]; deviceWork:DeviceWork[]; appVersion:string; appEnvironment:string; serverTime:string };
 type NotificationItem = { id:string; title:string; body:string; targetClientId?:string|null; createdAt:string; isRead:number; readAt?:string };
 
 const api = async (path: string, token: string, init: RequestInit = {}) => {
@@ -310,6 +314,7 @@ function App() {
   const [clearLocalPrinter, setClearLocalPrinter] = useState(true);
   const [clientId] = useState(() => { const old = localStorage.getItem('esc-client-id'); if (old) return old; const next = crypto.randomUUID(); localStorage.setItem('esc-client-id', next); return next; });
   const [adminDashboard, setAdminDashboard] = useState<AdminDashboard | null>(null);
+  const [profile, setProfile] = useState<ProfileForm>({ displayName:'', employeeNumber:'', employeeName:'', contactPhone:'', contactEmail:'' });
   const [adminWorkTitle, setAdminWorkTitle] = useState('');
   const [adminWorkDate, setAdminWorkDate] = useState(localDateInputValue());
   const [adminWorkDetail, setAdminWorkDetail] = useState('');
@@ -471,7 +476,7 @@ function App() {
   }, [token, user, clientId, printer, savedPrinter]);
 
   useEffect(() => {
-    if (!token || !user || user.role !== 'admin' || !['users', 'device-work', 'notifications'].includes(tab)) return;
+    if (!token || !user || user.role !== 'admin' || !['users', 'registered-devices', 'device-work', 'notifications'].includes(tab)) return;
     let alive = true;
     const refresh = async () => {
       try { const data = await api('/admin/dashboard', token); if (alive) setAdminDashboard(data); }
@@ -482,7 +487,28 @@ function App() {
     return () => { alive = false; window.clearInterval(timer); };
   }, [token, user, tab]);
 
+  useEffect(() => {
+    if (!token || !user || user.role === 'admin' || tab !== 'profile') return;
+    let alive = true;
+    api('/me', token).then(result => {
+      if (!alive) return;
+      const p = result.user || {};
+      setProfile({ displayName:p.displayName || '', employeeNumber:p.employeeNumber || '', employeeName:p.employeeName || '', contactPhone:p.contactPhone || '', contactEmail:p.contactEmail || '' });
+    }).catch(err => { if (alive) setMessage(err instanceof Error ? err.message : '無法載入個人資料'); });
+    return () => { alive = false; };
+  }, [token, user, tab]);
+
   async function refreshAdmin() { setAdminDashboard(await api('/admin/dashboard', token)); }
+  async function saveProfile(e: React.FormEvent) {
+    e.preventDefault(); setBusy(true);
+    try {
+      const result = await api('/me', token, { method:'PUT', body:JSON.stringify(profile) });
+      setProfile({ displayName:result.user.displayName || '', employeeNumber:result.user.employeeNumber || '', employeeName:result.user.employeeName || '', contactPhone:result.user.contactPhone || '', contactEmail:result.user.contactEmail || '' });
+      setUser((old:any) => old ? { ...old, displayName:result.user.displayName } : old);
+      setMessage('個人資料已更新；登入用戶名保持不變。');
+    } catch (err) { setMessage(err instanceof Error ? err.message : '更新個人資料失敗'); }
+    finally { setBusy(false); }
+  }
   async function adminAction(path: string, init: RequestInit, success: string) {
     setBusy(true);
     try { await api(path, token, init); await refreshAdmin(); setMessage(success); }
@@ -929,8 +955,8 @@ function App() {
   }, [token, user]);
   const tabs = useMemo(() => {
     const base: [string,string][] = user?.role === 'admin'
-      ? [['notifications', '通知'], ['users', '用戶管理'], ['device-work', '設備工作記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]
-      : [['print', '打印'], ['notifications', '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')], ['events', '事件管理']];
+      ? [['notifications', '通知'], ['users', '用戶管理'], ['registered-devices', '註冊設備'], ['device-work', '設備工作記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]
+      : [['print', '打印'], ['events', '事件管理'], ['notifications', '通知' + (notifications.some(n => !n.isRead) ? ' •' : '')], ['profile', '個人資料']];
     return base;
   }, [user?.role, notifications]);
   const displayedVersion = serverVersion || APP_VERSION;
@@ -987,7 +1013,7 @@ function App() {
         </div>
       </section></div>}
       {tab === 'notifications' && user.role === 'admin' && <section className="panel"><h2>發送通知</h2><p className="muted">通知集中於此頁管理。通知會保存到客戶端站內通知中心；如已設定 VAPID，亦會向指定已訂閱設備或所有已訂閱設備發送 Web Push。管理員不顯示自己的通知收件匣。</p><form onSubmit={sendAdminNotification}><label>接收對象<select value={notificationTarget} onChange={e=>setNotificationTarget(e.target.value)}><option value="">廣播所有已訂閱設備</option>{(adminDashboard?.clients || []).filter(c => Number(c.pushSubscribed || 0) > 0).map(c=><option key={c.clientId} value={c.clientId}>{c.username} · {c.clientId.slice(0,8)}… {c.online ? '（在線）' : '（離線）'} · 已訂閱推播</option>)}</select></label><label>通知標題<input required maxLength={200} value={notificationTitle} onChange={e=>setNotificationTitle(e.target.value)} placeholder="例如：系統維護通知" /></label><label>通知內容<textarea required maxLength={5000} rows={4} value={notificationBody} onChange={e=>setNotificationBody(e.target.value)} placeholder="輸入要通知客戶端的訊息" /></label><button disabled={busy || !notificationTitle.trim() || !notificationBody.trim()}>{notificationTarget ? '推播指定設備' : '廣播所有已訂閱設備'}</button></form></section>}
-            {tab === 'notifications' && user.role !== 'admin' && <section className="panel"><div className="admin-heading"><div><h2>通知</h2><p className="muted">通知保存在伺服器 SQLite，每 3 秒自動更新；重新登入後仍可查看。啟用 Web App 推播後，即使 App 在背景也可接收系統通知（視瀏覽器及作業系統支援而定）。</p></div><span className="count">{notifications.filter(n => !n.isRead).length} 則未讀</span></div><div className="actions"><button disabled={busy} onClick={() => void subscribePush()}>啟用／修復推播訂閱</button></div><p className="hint">iPhone／iPad：請先將網站加入主畫面並從主畫面開啟；Android：請使用最新版 Chrome 或支援 Web Push 的瀏覽器。兩者均須使用 HTTPS 並允許通知。</p>{notifications.length === 0 ? <p className="muted">目前沒有通知。</p> : notifications.map(n => <article className="list-item" key={n.id}><div className="list-heading"><strong>{n.title}</strong><small>{n.createdAt}</small></div><p>{n.body}</p><div className="actions"><span className="muted">{n.targetClientId ? '指定給此客戶端' : '全體廣播'}</span>{n.isRead ? <span className="status">已讀</span> : <button className="secondary compact" onClick={() => void markNotificationRead(n.id)}>標記已讀</button>}</div></article>)}</section>}{tab === 'events' && user.role !== 'admin' && <section className="grid two">
+            {tab === 'notifications' && user.role !== 'admin' && <section className="panel"><div className="admin-heading"><div><h2>通知</h2><p className="muted">通知保存在伺服器 SQLite，每 3 秒自動更新；重新登入後仍可查看。啟用 Web App 推播後，即使 App 在背景也可接收系統通知（視瀏覽器及作業系統支援而定）。</p></div><span className="count">{notifications.filter(n => !n.isRead).length} 則未讀</span></div><div className="actions"><button disabled={busy} onClick={() => void subscribePush()}>啟用／修復推播訂閱</button></div><p className="hint">iPhone／iPad：請先將網站加入主畫面並從主畫面開啟；Android：請使用最新版 Chrome 或支援 Web Push 的瀏覽器。兩者均須使用 HTTPS 並允許通知。</p>{notifications.length === 0 ? <p className="muted">目前沒有通知。</p> : notifications.map(n => <article className="list-item" key={n.id}><div className="list-heading"><strong>{n.title}</strong><small>{n.createdAt}</small></div><p>{n.body}</p><div className="actions"><span className="muted">{n.targetClientId ? '指定給此客戶端' : '全體廣播'}</span>{n.isRead ? <span className="status">已讀</span> : <button className="secondary compact" onClick={() => void markNotificationRead(n.id)}>標記已讀</button>}</div></article>)}</section>}{tab === 'profile' && user.role !== 'admin' && <section className="grid two"><article className="panel"><h2>個人資料</h2><p className="muted">可更新顯示名稱、員工資料及聯絡方式。登入用戶名不可在此修改。</p><form onSubmit={saveProfile}><label>登入用戶名<input value={user.username} readOnly disabled /></label><label>顯示名稱<input required maxLength={100} value={profile.displayName} onChange={e=>setProfile(p=>({...p,displayName:e.target.value}))} /></label><label>員工編號（必填，只限 0-9）<input required inputMode="numeric" pattern="[0-9]+" value={profile.employeeNumber} onChange={e=>setProfile(p=>({...p,employeeNumber:e.target.value.replace(/[^0-9]/g,'')}))} /></label><label>員工姓名<input maxLength={100} value={profile.employeeName} onChange={e=>setProfile(p=>({...p,employeeName:e.target.value}))} /></label><label>聯絡電話<input type="tel" maxLength={40} value={profile.contactPhone} onChange={e=>setProfile(p=>({...p,contactPhone:e.target.value}))} /></label><label>電郵<input type="email" maxLength={254} value={profile.contactEmail} onChange={e=>setProfile(p=>({...p,contactEmail:e.target.value}))} /></label><button disabled={busy || !profile.displayName.trim() || !/^[0-9]+$/.test(profile.employeeNumber)}>{busy ? '保存中…' : '保存個人資料'}</button></form></article><article className="panel"><h2>帳戶與設備</h2><p>登入用戶名：<strong>{user.username}</strong></p><p>顯示名稱：<strong>{profile.displayName || user.displayName || user.username}</strong></p><p className="hint">用戶名是 Passkey 登入帳戶的固定識別，不允許從個人資料頁修改。如需更正登入用戶名，請聯絡管理員處理。</p></article></section>}{tab === 'events' && user.role !== 'admin' && <section className="grid two">
         <article className="panel"><h2>建立事件</h2><p className="muted">新事件預設只儲存在這部手機的瀏覽器，不會自動上傳。需要時可手動上傳系統，或使用目前已連接的熱敏打印機列印固定測試收據。</p>
           <form onSubmit={saveLocalWork}><label>事件標題<input required maxLength={200} value={workTitle} onChange={e=>setWorkTitle(e.target.value)} placeholder="例如：設備檢查、付款異常、客戶跟進" /></label><label>事件內容／工作備註<textarea rows={5} maxLength={10000} value={workContent} onChange={e=>setWorkContent(e.target.value)} placeholder="記錄事件經過、處理方式及備註" /></label><label className="event-date-field">事件日期與時間<input className="event-datetime-input" type="datetime-local" value={workDate} onChange={e=>setWorkDate(e.target.value)} /></label><label>圖片／影片附件（可多選）<input type="file" accept="image/*,video/*,.heic,.heif,.mov,.mp4,.m4v,.3gp,.3g2,.webm,.mkv,.avi,.mts,.m2ts" multiple onChange={e=>{
             const selectedFiles=Array.from(e.target.files || []);

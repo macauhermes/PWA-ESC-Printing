@@ -656,10 +656,10 @@ function App() {
       setLocalDrafts(old => [draft, ...old]);
       clearWorkForm();
       if (remoteOnline) {
-        setMessage(`事件 ${draft.eventCode} 已加入上傳事件隊列，依事件編號順序排程上傳；你可以繼續建立新事件。`);
+        setMessage(`事件 ${draft.eventCode} 已加入上傳隊列，依事件編號順序排程上傳；你可以繼續建立新事件。`);
         window.setTimeout(() => startNextQueuedUpload(), 0);
       } else {
-        setMessage(`遠端未連線，事件 ${draft.eventCode} 已加入上傳事件隊列，恢復連線後會依事件編號順序上傳。`);
+        setMessage(`遠端未連線，事件 ${draft.eventCode} 已加入上傳隊列，恢復連線後會依事件編號順序上傳。`);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '無法將事件保存至本機上傳隊列；表單內容仍保留，請檢查儲存空間後重試。');
@@ -771,7 +771,7 @@ function App() {
       await saveLocalDraft(retained).catch(() => {});
       setLocalDrafts(old => old.map(item => item.id === draft.id ? retained : item));
       if (status === 'cancelled') setMessage(`事件 ${draft.eventCode} 已取消上傳；可按「繼續上傳」重新排程，或刪除暫存。`);
-      else setMessage(status === 'queued' ? `事件 ${draft.eventCode} 上傳中斷，已保留在上傳事件隊列，稍後自動重試。` : (err instanceof Error ? err.message : '上傳失敗；本機事件仍保留，可手動繼續上傳。'));
+      else setMessage(status === 'queued' ? `事件 ${draft.eventCode} 上傳中斷，已保留在上傳隊列，稍後自動重試。` : (err instanceof Error ? err.message : '上傳失敗；本機事件仍保留，可手動繼續上傳。'));
     } finally {
       uploadingLocalWorkIds.current.delete(draft.id);
       uploadControllers.current.delete(draft.id);
@@ -781,7 +781,7 @@ function App() {
   }
   async function enqueueLocalDraftForUpload(draft: LocalDraft) {
     if (draft.syncStatus && draft.syncStatus !== 'draft') {
-      setMessage('此事件已在上傳事件隊列中，請在隊列區操作。');
+      setMessage('此事件已在上傳隊列中，請在隊列區操作。');
       return;
     }
     if (!draft.title.trim()) {
@@ -792,7 +792,7 @@ function App() {
     try {
       await saveLocalDraft(queued);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));
-      setMessage(`事件 ${draft.eventCode || '（待補編號）'} 已加入上傳事件隊列，將依事件編號順序上傳。`);
+      setMessage(`事件 ${draft.eventCode || '（待補編號）'} 已加入上傳隊列，將依事件編號順序上傳。`);
       window.setTimeout(() => startNextQueuedUpload(), 0);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '無法將手機暫存事件加入上傳隊列；原暫存仍保留。');
@@ -825,7 +825,7 @@ function App() {
       await saveLocalDraft(localDraft);
       setLocalDrafts(old => old.map(item => item.id === draft.id ? localDraft : item));
       setMessage(`事件 ${draft.eventCode} 已移至「手機暫存事件」，不會再自動排程上傳。`);
-    } catch (err) { setMessage(err instanceof Error ? err.message : '轉為手機暫存失敗；事件仍保留在上傳事件隊列。'); }
+    } catch (err) { setMessage(err instanceof Error ? err.message : '轉為手機暫存失敗；事件仍保留在上傳隊列。'); }
   }
 
   async function saveEvent(e: React.FormEvent) {
@@ -918,6 +918,14 @@ function App() {
     window.setTimeout(() => startNextQueuedUpload(), 0);
     return () => window.clearInterval(timer);
   }, [remoteOnline, token, user]);
+  // Re-run scheduling whenever the persisted queue/UI state changes. This also
+  // handles initial IndexedDB hydration, when a one-shot timeout can run before
+  // localDraftsRef has received the loaded records.
+  useEffect(() => {
+    if (!remoteOnline || !token || !user) return;
+    const timer = window.setTimeout(() => startNextQueuedUpload(), 0);
+    return () => window.clearTimeout(timer);
+  }, [localDrafts, remoteOnline, token, user]);
   const tabs = useMemo(() => {
     const base: [string,string][] = user?.role === 'admin'
       ? [['notifications', '通知'], ['users', '用戶管理'], ['device-work', '設備工作記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]
@@ -1015,8 +1023,14 @@ function App() {
         <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div></div>
           {!localDrafts.some(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">尚無 24 小時內的已暫存事件。</p> : localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · 尚未上傳</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions"><button disabled={busy} onClick={()=>void enqueueLocalDraftForUpload(draft)}>上傳至後台</button><button className="danger compact" disabled={busy} onClick={()=>void deleteLocalWork(draft.id)}>刪除暫存</button></div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(draft.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div></div>)}
         </article>
-        <article className="panel"><div className="admin-heading"><div><h2>上傳事件隊列</h2><p className="muted">中斷或等待重試：{localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div></div>
-          {!localDrafts.some(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">目前沒有排程中的事件。</p> : localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · {draft.syncStatus === 'queued' ? '已排程，依事件編號順序等待上傳' : draft.syncStatus === 'uploading' ? '正在上傳；可取消本次上傳' : draft.syncStatus === 'cancelled' ? '已取消上傳，可繼續上傳或轉為暫存' : '上次上傳失敗，已暫停；可繼續上傳或轉為暫存'}</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions queue-actions">{draft.syncStatus === 'uploading' ? <button className="secondary compact" onClick={()=>void cancelLocalWork(draft)}>取消上傳</button> : draft.syncStatus === 'queued' ? <button className="secondary compact" onClick={()=>void continueLocalWork(draft)}>繼續上傳</button> : <><button className="secondary compact" onClick={()=>void continueLocalWork(draft)}>繼續上傳</button><button className="secondary compact" onClick={()=>void convertQueueItemToDraft(draft)}>轉為暫存</button></>}</div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(draft.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div></div>)}
+        <article className="panel"><div className="admin-heading"><div><h2>上傳隊列</h2><p className="muted">中斷或等待重試：{localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div></div>
+          {!localDrafts.some(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">目前沒有排程中的事件。</p> : localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · {draft.syncStatus === 'queued' ? '已排程，依事件編號順序等待上傳' : draft.syncStatus === 'uploading' ? '正在上傳；可取消本次上傳' : draft.syncStatus === 'cancelled' ? '已取消上傳' : '上次上傳失敗，等待手動重新排程'}</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions queue-actions">
+              {draft.syncStatus === 'queued' || draft.syncStatus === 'uploading'
+                ? <button className="secondary compact" onClick={()=>void cancelLocalWork(draft)}>取消上傳</button>
+                : draft.syncStatus === 'cancelled' || draft.syncStatus === 'failed'
+                  ? <button className="secondary compact" onClick={()=>void continueLocalWork(draft)}>繼續上傳</button>
+                  : null}
+            </div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(draft.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div></div>)}
         </article>
         <article className="panel"><h2>已上傳事件</h2><p className="muted">只顯示目前登入客戶端已上傳至系統的工作記錄。點擊附件會在頁面內開啟預覽，不會離開目前畫面。</p>{!uploadedWork.some(item => remainingMs(item.createdAt, clockNow) > 0) ? <p className="muted">尚無 24 小時內的已上傳事件。</p> : uploadedWork.filter(item => remainingMs(item.createdAt, clockNow) > 0).map(item=><div className="work-event-card" key={item.id}><div className="list-heading"><strong>{item.title}</strong><small>{item.eventDate || item.createdAt}</small></div>{item.eventCode && <p className="event-code">事件編號：{item.eventCode}</p>}<p className="muted">{item.content || '（沒有備註）'}</p><div className="media-list">{(item.media || []).map((m,i)=><div className="attachment-row" key={m.id || i}><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, item.createdAt)}>{m.kind==='video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className="attachment-file-size">({((m.size || 0)/1024/1024).toFixed(1)}MB)</span></div>)}</div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(item.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(item.createdAt, clockNow).percent}%`}} /></div></div></div>)}</article>
       </section>}

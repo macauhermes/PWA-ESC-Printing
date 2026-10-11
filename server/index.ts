@@ -294,7 +294,7 @@ app.get('/api/audit', auth, requireAdmin, (req: any, res) => {
 
 
 // Administrator console APIs. Client heartbeats and dashboard refreshes run every 3 seconds.
-app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
+app.get('/api/admin/dashboard', auth, requireAdmin, (req: any, res) => {
   const users = db.prepare(`SELECT u.id,u.username,u.employee_number AS employeeNumber,
     u.employee_name AS employeeName,u.contact_phone AS contactPhone,u.contact_email AS contactEmail,u.role,u.created_at AS createdAt,
     (SELECT COUNT(*) FROM passkeys p WHERE p.user_id=u.id) AS passkeyCount,
@@ -303,13 +303,22 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     FROM users u ORDER BY u.created_at DESC`).all(Date.now()) as any[];
   const userDeviceLinks = db.prepare(`SELECT ud.user_id AS userId,cd.client_id AS clientId,cd.device_code AS deviceCode,
     ud.registered_at AS registeredAt,ud.last_seen AS lastSeen FROM user_devices ud JOIN client_devices cd ON cd.client_id=ud.client_id
+    JOIN users linked_user ON linked_user.id=ud.user_id WHERE linked_user.role<>'admin'
     ORDER BY ud.registered_at DESC`).all() as any[];
   for (const item of users) item.linkedDevices = userDeviceLinks.filter(link => link.userId === item.id);
   const devices = db.prepare(`SELECT cd.client_id AS clientId,cd.device_code AS deviceCode,cd.created_at AS createdAt,
     CASE WHEN cs.online=1 AND datetime(cs.last_seen)>=datetime('now','-10 seconds') THEN 1 ELSE 0 END AS online,
-    cs.last_seen AS lastSeen,cs.user_agent AS userAgent,cs.app_version AS appVersion,cs.app_environment AS appEnvironment,
-    (SELECT COUNT(*) FROM user_devices ud WHERE ud.client_id=cd.client_id) AS userCount
-    FROM client_devices cd LEFT JOIN client_status cs ON cs.client_id=cd.client_id ORDER BY cd.created_at DESC`).all() as any[];
+    cs.user_id AS currentUserId,cs.username AS currentUsername,cs.last_seen AS lastSeen,cs.user_agent AS userAgent,
+    cs.app_version AS appVersion,cs.app_environment AS appEnvironment,
+    cs.bluetooth_supported AS bluetoothSupported,cs.bluetooth_connected AS bluetoothConnected,
+    cs.printer_connected AS printerConnected,cs.printer_name AS printerName,cs.printer_id AS printerId,
+    (SELECT COUNT(*) FROM push_subscriptions ps WHERE ps.client_id=cd.client_id) AS pushSubscribed,
+    (SELECT COUNT(*) FROM user_devices ud JOIN users lu ON lu.id=ud.user_id WHERE ud.client_id=cd.client_id AND lu.role<>'admin') AS userCount
+    FROM client_devices cd LEFT JOIN client_status cs ON cs.client_id=cd.client_id
+    WHERE cd.client_id<>?
+      AND NOT EXISTS (SELECT 1 FROM client_status admin_cs LEFT JOIN users admin_u ON admin_u.id=admin_cs.user_id
+        WHERE admin_cs.client_id=cd.client_id AND (admin_u.role='admin' OR (?<>'' AND admin_cs.username=?)))
+    ORDER BY cd.created_at DESC`).all(req.user.client_id || '', adminUsername, adminUsername) as any[];
   for (const device of devices) device.registeredUsers = userDeviceLinks.filter(link => link.clientId === device.clientId).map(link => {
     const item = users.find(candidate => candidate.id === link.userId);
     return item ? { id: item.id, username: item.username, registeredAt: link.registeredAt, lastSeen: link.lastSeen } : null;
@@ -320,7 +329,11 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     c.printer_connected AS printerConnected,c.printer_name AS printerName,c.printer_id AS printerId,
     c.app_version AS appVersion,c.app_environment AS appEnvironment,
     (SELECT COUNT(*) FROM push_subscriptions ps WHERE ps.client_id=c.client_id) AS pushSubscribed,
-    c.user_agent AS userAgent,c.last_seen AS lastSeen FROM client_status c ORDER BY c.last_seen DESC`).all();
+    c.user_agent AS userAgent,c.last_seen AS lastSeen FROM client_status c
+    LEFT JOIN users status_user ON status_user.id=c.user_id
+    WHERE c.client_id<>? AND COALESCE(status_user.role,'user')<>'admin'
+      AND (?='' OR c.username<>?)
+    ORDER BY c.last_seen DESC`).all(req.user.client_id || '', adminUsername, adminUsername);
   const operations = db.prepare('SELECT * FROM audit_log ORDER BY id DESC LIMIT 200').all();
   const jobs = db.prepare('SELECT * FROM daily_jobs ORDER BY created_at DESC LIMIT 200').all();
   const deviceWork = db.prepare(`SELECT w.id,w.client_id AS clientId,w.user_id AS userId,w.username,w.title,w.content,w.event_date AS eventDate,w.created_at AS createdAt,w.printer_name AS printerName,w.event_code AS eventCode
@@ -397,12 +410,27 @@ app.delete('/api/admin/devices/:clientId', auth, requireAdmin, (req: any, res) =
 });
 app.post('/api/admin/clients/:clientId/logout', auth, requireAdmin, (req: any, res) => {
   const clientId = String(req.params.clientId).slice(0,128);
-  const client = db.prepare('SELECT user_id,username FROM client_status WHERE client_id=?').get(clientId) as any;
+  const client = db.prepare(`SELECT cs.user_id AS userId,cs.username,u.role FROM client_status cs LEFT JOIN users u ON u.id=cs.user_id WHERE cs.client_id=?`).get(clientId) as any;
   if (!client) return res.status(404).json({ error: 'Client session not found' });
-  db.prepare('DELETE FROM sessions WHERE user_id=? AND client_id=?').run(client.user_id, clientId);
+  if (clientId === req.user.client_id || client.role === 'admin' || (adminUsername && client.username === adminUsername)) {
+    return res.status(400).json({ error: '不能強制登出管理員目前使用的設備。' });
+  }
+  db.prepare('DELETE FROM sessions WHERE user_id=? AND client_id=?').run(client.userId, clientId);
   db.prepare('UPDATE client_status SET online=0,last_seen=CURRENT_TIMESTAMP WHERE client_id=?').run(clientId);
   audit(req.user, 'admin.client_forced_logout', 'client', clientId, { username: client.username });
   res.json({ ok: true });
+});
+app.post('/api/admin/users/:id/logout', auth, requireAdmin, (req: any, res) => {
+  const targetId = String(req.params.id || '').slice(0, 128);
+  const target = db.prepare('SELECT id,username,role FROM users WHERE id=?').get(targetId) as any;
+  if (!target) return res.status(404).json({ error: '用戶不存在。' });
+  if (target.role === 'admin' || (adminUsername && target.username === adminUsername)) {
+    return res.status(400).json({ error: '不能強制登出管理員帳戶。' });
+  }
+  const result = db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);
+  db.prepare('UPDATE client_status SET online=0,last_seen=CURRENT_TIMESTAMP WHERE user_id=?').run(target.id);
+  audit(req.user, 'admin.user_forced_logout', 'user', target.id, { username: target.username, revokedSessions: result.changes });
+  res.json({ ok: true, revokedSessions: result.changes });
 });
 app.delete('/api/admin/device-work/:id', auth, requireAdmin, (req: any, res) => {
   const workId = String(req.params.id || '').slice(0, 128);

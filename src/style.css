@@ -291,3 +291,6 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 .receipt-preview-popup{width:min(100%,420px)}
 .receipt-preview-popup .receipt-preview{max-width:100%;box-sizing:border-box;margin:0 auto 4px}
+
+/* Keep iOS form controls at 16px to prevent Safari's automatic focus zoom. This does not disable pinch zoom. */
+@media(max-width:600px){input,textarea,select{font-size:16px!important;}}

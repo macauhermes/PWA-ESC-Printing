@@ -16,7 +16,7 @@ type AdminUser = { id:string; username:string; displayName:string; role:string; 
 type AdminOperation = { id:number; username?:string; action:string; entity_type?:string; entity_id?:string; detail?:string; created_at:string };
 type WorkMedia = { id?:string; kind:string; originalName:string; mimeType:string; url?:string; name?:string; size?:number; blob?:Blob };
 type DeviceWork = { id:string; clientId:string; userId:string; username:string; title:string; content:string; eventDate?:string|null; createdAt:string; printerName?:string|null; eventCode?:string|null; media?:WorkMedia[] };
-type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string; eventCode:string; syncStatus?:'draft'|'queued'|'uploading'|'failed'; media:WorkMedia[] };
+type LocalDraft = { id:string; title:string; content:string; eventDate:string; createdAt:string; eventCode:string; syncStatus?:'draft'|'queued'|'uploading'|'failed'|'cancelled'; media:WorkMedia[] };
 type MediaViewer = { src:string; kind:'image'|'video'; name:string; revokeOnClose:boolean; recordCreatedAt?:string };
 type UploadProgress = { loaded:number; total:number; percent:number|null; bytesPerSecond:number };
 type AttachmentUploadStatus = 'pending'|'uploading'|'uploaded'|'failed';
@@ -46,7 +46,7 @@ const api = async (path: string, token: string, init: RequestInit = {}) => {
   if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
   return body;
 };
-function uploadFormDataWithProgress(path: string, token: string, data: FormData, onProgress: (progress: UploadProgress) => void): Promise<any> {
+function uploadFormDataWithProgress(path: string, token: string, data: FormData, onProgress: (progress: UploadProgress) => void, signal?: AbortSignal): Promise<any> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api' + path);
@@ -59,6 +59,10 @@ function uploadFormDataWithProgress(path: string, token: string, data: FormData,
     };
     xhr.onerror = () => reject(new Error('網絡連線中斷，請檢查網絡後重試。'));
     xhr.onabort = () => reject(new Error('上傳已取消。'));
+    if (signal) {
+      if (signal.aborted) { reject(new Error('上傳已取消。')); return; }
+      signal.addEventListener('abort', () => xhr.abort(), { once:true });
+    }
     xhr.onload = () => {
       let body: any = {};
       try { body = JSON.parse(xhr.responseText || '{}'); } catch {}
@@ -69,11 +73,12 @@ function uploadFormDataWithProgress(path: string, token: string, data: FormData,
   });
 }
 type WorkUploadFields = { title:string; content:string; eventDate:string; eventCode:string; createdAt:string };
-async function uploadWorkInChunks(token:string, fields:WorkUploadFields, media:WorkUploadMedia[], onProgress:(progress:UploadProgress)=>void, onStatus:(key:string,status:AttachmentUploadStatus)=>void, onFileProgress:(key:string,percent:number)=>void) {
+async function uploadWorkInChunks(token:string, fields:WorkUploadFields, media:WorkUploadMedia[], onProgress:(progress:UploadProgress)=>void, onStatus:(key:string,status:AttachmentUploadStatus)=>void, onFileProgress:(key:string,percent:number)=>void, signal?:AbortSignal) {
   const totalBytes = media.reduce((sum,file)=>sum+file.blob.size,0);
   const uploadedMediaIds:string[] = [];
   let completedBytes = 0;
   for (const file of media) {
+    if (signal?.aborted) throw new Error('上傳已取消。');
     if (file.blob.size < 1) throw new Error(`附件「${file.name}」是空檔案，請重新選擇。`);
     const mimeType = mediaMimeType(file.name,file.mimeType);
     if (!mimeType) throw new Error(`無法識別附件「${file.name}」的圖片／影片格式；請使用 JPG、PNG、HEIC、MP4、MOV、M4V、WEBM、MKV 或 AVI 等常見格式。`);
@@ -90,12 +95,13 @@ async function uploadWorkInChunks(token:string, fields:WorkUploadFields, media:W
         data.append('uploadId',uploadId); data.append('filename',file.name || 'attachment'); data.append('mimeType',mimeType);
         data.append('totalSize',String(file.blob.size)); data.append('chunkSize',String(WORK_UPLOAD_CHUNK_BYTES)); data.append('index',String(index)); data.append('totalChunks',String(totalChunks));
         data.append('chunk',chunk,'chunk.bin');
+        if (signal?.aborted) throw new Error('上傳已取消。');
         const result = await uploadFormDataWithProgress('/work/chunk',token,data,progress => {
           const loaded = Math.min(chunk.size,progress.loaded);
           const overallLoaded = Math.min(totalBytes,completedBytes+start+loaded);
           onProgress({ loaded:overallLoaded,total:totalBytes,percent:totalBytes>0?Math.min(99,Math.round(overallLoaded/totalBytes*100)):null,bytesPerSecond:0 });
           onFileProgress(file.key,Math.min(99,Math.round((start+loaded)/file.blob.size*100)));
-        });
+        },signal);
         if (index===totalChunks-1) mediaId = String(result.mediaId || '');
         const overallLoaded = Math.min(totalBytes,completedBytes+start+chunk.size);
         onProgress({ loaded:overallLoaded,total:totalBytes,percent:totalBytes>0?Math.min(99,Math.round(overallLoaded/totalBytes*100)):null,bytesPerSecond:0 });
@@ -105,7 +111,8 @@ async function uploadWorkInChunks(token:string, fields:WorkUploadFields, media:W
     } catch (error) { onStatus(file.key,'failed'); throw error; }
   }
   onProgress({ loaded:completedBytes,total:totalBytes,percent:99,bytesPerSecond:0 });
-  await api('/work',token,{method:'POST',body:JSON.stringify({...fields,uploadedMediaIds})});
+  if (signal?.aborted) throw new Error('上傳已取消。');
+  await api('/work',token,{method:'POST',body:JSON.stringify({...fields,uploadedMediaIds}),signal});
   onProgress({ loaded:totalBytes,total:totalBytes,percent:100,bytesPerSecond:0 });
 }
 const formatBytes = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
@@ -266,6 +273,9 @@ function App() {
   const [printNote, setPrintNote] = useState('');
   const [events, setEvents] = useState<EventItem[]>([]);
   const [localDrafts, setLocalDrafts] = useState<LocalDraft[]>([]);
+  const localDraftsRef = useRef<LocalDraft[]>([]);
+  localDraftsRef.current = localDrafts;
+  const uploadControllers = useRef(new Map<string,AbortController>());
   const [localStorageInfo, setLocalStorageInfo] = useState<LocalStorageInfo>({ quotaBytes: DEFAULT_STORAGE_LIMIT_BYTES, usageBytes: 0, measured: false });
   const [workMedia, setWorkMedia] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
@@ -381,7 +391,7 @@ function App() {
     }).catch(() => {});
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, [token, user]);
-  useEffect(() => { loadLocalDrafts().then(drafts => { const normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index]).map(draft => saveLocalDraft(draft).catch(() => {}))); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, []);
+  useEffect(() => { loadLocalDrafts().then(drafts => { const normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index]).map(draft => saveLocalDraft(draft).catch(() => {}))); window.setTimeout(() => startNextQueuedUpload(), 0); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, []);
   useEffect(() => {
     let active = true;
     const refreshStorageInfo = async () => {
@@ -646,10 +656,10 @@ function App() {
       setLocalDrafts(old => [draft, ...old]);
       clearWorkForm();
       if (remoteOnline) {
-        setMessage(`事件 ${draft.eventCode} 已加入上傳隊列，正在背景上傳；你可以繼續建立新事件。`);
-        void uploadLocalWork(draft);
+        setMessage(`事件 ${draft.eventCode} 已加入上傳事件隊列，依事件編號順序排程上傳；你可以繼續建立新事件。`);
+        window.setTimeout(() => startNextQueuedUpload(), 0);
       } else {
-        setMessage(`遠端未連線，事件 ${draft.eventCode} 已加入本機上傳隊列，恢復連線後會自動重試。`);
+        setMessage(`遠端未連線，事件 ${draft.eventCode} 已加入上傳事件隊列，恢復連線後會依事件編號順序上傳。`);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '無法將事件保存至本機上傳隊列；表單內容仍保留，請檢查儲存空間後重試。');
@@ -689,6 +699,39 @@ function App() {
     setMessage(`已移除附件：${removed?.name || '附件'}`);
   }
 
+  function eventSequenceNumber(draft: LocalDraft) {
+    const prefix = Number((draft.eventCode || '').split('-')[0]);
+    return Number.isFinite(prefix) && prefix > 0 ? prefix : Number.MAX_SAFE_INTEGER;
+  }
+  function startNextQueuedUpload() {
+    if (!remoteOnline || !token || !user || uploadingLocalWorkIds.current.size > 0) return;
+    const next = localDraftsRef.current
+      .filter(draft => draft.syncStatus === 'queued' && remainingMs(draft.createdAt, Date.now()) > 0)
+      .sort((a,b) => eventSequenceNumber(a) - eventSequenceNumber(b) || a.createdAt.localeCompare(b.createdAt))[0];
+    if (next) void uploadLocalWork(next);
+  }
+  async function cancelLocalWork(draft: LocalDraft) {
+    if (draft.syncStatus === 'uploading' || uploadControllers.current.has(draft.id) || uploadingLocalWorkIds.current.has(draft.id)) {
+      uploadControllers.current.get(draft.id)?.abort();
+      setMessage(`已要求取消事件 ${draft.eventCode} 的上傳；原始事件及附件會保留在隊列。`);
+      return;
+    }
+    const cancelled = { ...draft, syncStatus:'cancelled' as const };
+    try {
+      await saveLocalDraft(cancelled);
+      setLocalDrafts(old => old.map(item => item.id === draft.id ? cancelled : item));
+      setMessage(`事件 ${draft.eventCode} 已取消排程；可繼續上傳或刪除暫存。`);
+    } catch (err) { setMessage(err instanceof Error ? err.message : '保存取消狀態失敗，請重試。'); }
+  }
+  async function continueLocalWork(draft: LocalDraft) {
+    const queued = { ...draft, syncStatus:'queued' as const };
+    try {
+      await saveLocalDraft(queued);
+      setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));
+      setMessage(`事件 ${draft.eventCode} 已放回上傳排程，將依最小事件編號順序處理。`);
+      window.setTimeout(() => startNextQueuedUpload(), 0);
+    } catch (err) { setMessage(err instanceof Error ? err.message : '無法恢復上傳排程；本機事件仍保留。'); }
+  }
   async function uploadLocalWork(draft: LocalDraft) {
     if (!draft.eventCode) {
       try {
@@ -697,38 +740,55 @@ function App() {
         setLocalDrafts(old => old.map(item => item.id === draft.id ? draft : item));
       } catch (err) { setMessage(err instanceof Error ? err.message : '無法為舊暫存記錄補發事件編號。'); return; }
     }
+    if (draft.syncStatus !== 'queued' || !remoteOnline || uploadingLocalWorkIds.current.size > 0 || uploadingLocalWorkIds.current.has(draft.id)) return;
+    const smallestQueued = localDraftsRef.current
+      .filter(item => item.syncStatus === 'queued' && remainingMs(item.createdAt, Date.now()) > 0)
+      .sort((a,b) => eventSequenceNumber(a) - eventSequenceNumber(b) || a.createdAt.localeCompare(b.createdAt))[0];
+    if (smallestQueued && smallestQueued.id !== draft.id) return;
     if (remainingMs(draft.createdAt, Date.now()) <= 0) {
       await deleteLocalDraft(draft.id).catch(() => {}); setLocalDrafts(old => old.filter(item => item.id !== draft.id));
       setMessage('此事件已超過 24 小時，已從客戶端移除。'); return;
     }
-    if (!remoteOnline) {
-      const queued = { ...draft, syncStatus:'queued' as const };
-      await saveLocalDraft(queued); setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));
-      setMessage(`遠端未連線，事件 ${draft.eventCode} 保留在本機上傳隊列。`); return;
-    }
-    if (uploadingLocalWorkIds.current.size > 0 || uploadingLocalWorkIds.current.has(draft.id)) return;
     uploadingLocalWorkIds.current.add(draft.id);
+    const controller = new AbortController();
+    uploadControllers.current.set(draft.id,controller);
     const uploading = { ...draft, syncStatus:'uploading' as const };
     setLocalDrafts(old => old.map(item => item.id === draft.id ? uploading : item));
     await saveLocalDraft(uploading).catch(() => {});
+    let finalStatus: LocalDraft['syncStatus'] = 'uploading';
     try {
       const queuedMedia:WorkUploadMedia[] = draft.media.map((file,index)=>({file,index})).filter(item=>item.file.blob).map(({file,index})=>({blob:file.blob as Blob,name:file.name || file.originalName || 'attachment',mimeType:mediaMimeType(file.name || file.originalName || 'attachment',file.mimeType || file.blob?.type || ''),key:draftAttachmentKey(draft.id,index,file)}));
       setAttachmentUploadStatuses(old=>({...old,...Object.fromEntries(queuedMedia.map(file=>[file.key,'pending' as AttachmentUploadStatus]))}));
       setUploadProgress({ loaded:0, total:queuedMedia.reduce((sum,file)=>sum+file.blob.size,0), percent:0, bytesPerSecond:0 });
-      await uploadWorkInChunks(token,{title:draft.title,content:draft.content,eventDate:draft.eventDate,eventCode:draft.eventCode,createdAt:draft.createdAt},queuedMedia,setUploadProgress,(key,status)=>setAttachmentUploadStatuses(old=>({...old,[key]:status})),(key,percent)=>setAttachmentUploadPercents(old=>({...old,[key]:percent})));
-      await deleteLocalDraft(draft.id); setLocalDrafts(old => old.filter(item => item.id !== draft.id));
+      await uploadWorkInChunks(token,{title:draft.title,content:draft.content,eventDate:draft.eventDate,eventCode:draft.eventCode,createdAt:draft.createdAt},queuedMedia,setUploadProgress,(key,status)=>setAttachmentUploadStatuses(old=>({...old,[key]:status})),(key,percent)=>setAttachmentUploadPercents(old=>({...old,[key]:percent})),controller.signal);
+      await deleteLocalDraft(draft.id); finalStatus = undefined;
+      setLocalDrafts(old => old.filter(item => item.id !== draft.id));
       setUploadedWork(await api('/work', token)); setMessage(`事件 ${draft.eventCode} 及 ${draft.media.length} 個附件已上傳。`);
     } catch (err) {
-      const status = isConnectivityFailure(err) ? 'queued' as const : 'failed' as const;
+      const status = controller.signal.aborted ? 'cancelled' as const : isConnectivityFailure(err) ? 'queued' as const : 'failed' as const;
+      finalStatus = status;
       const retained = { ...draft, syncStatus:status };
       await saveLocalDraft(retained).catch(() => {});
       setLocalDrafts(old => old.map(item => item.id === draft.id ? retained : item));
-      setMessage(status === 'queued' ? `事件 ${draft.eventCode} 上傳中斷，已保留在隊列，稍後自動重試。` : (err instanceof Error ? err.message : '上傳失敗；本機事件仍保留，可手動重試。'));
-    } finally { uploadingLocalWorkIds.current.delete(draft.id); window.setTimeout(() => setUploadProgress(null), 1200); }
+      if (status === 'cancelled') setMessage(`事件 ${draft.eventCode} 已取消上傳；可按「繼續上傳」重新排程，或刪除暫存。`);
+      else setMessage(status === 'queued' ? `事件 ${draft.eventCode} 上傳中斷，已保留在上傳事件隊列，稍後自動重試。` : (err instanceof Error ? err.message : '上傳失敗；本機事件仍保留，可手動繼續上傳。'));
+    } finally {
+      uploadingLocalWorkIds.current.delete(draft.id);
+      uploadControllers.current.delete(draft.id);
+      window.setTimeout(() => setUploadProgress(null), 1200);
+      if (finalStatus !== 'queued') window.setTimeout(() => startNextQueuedUpload(), 0);
+    }
   }
   async function deleteLocalWork(draftId: string) {
-    if (!window.confirm('確定刪除此手機暫存事件？')) return;
-    await deleteLocalDraft(draftId).catch(() => {}); setLocalDrafts(old => old.filter(item => item.id !== draftId)); setMessage('已刪除手機暫存事件。');
+    if (uploadingLocalWorkIds.current.has(draftId)) {
+      setMessage('上傳中的事件請先按「取消上傳」，取消完成後才可刪除暫存。'); return;
+    }
+    if (!window.confirm('確定刪除此事件的本機暫存及附件？此操作無法復原。')) return;
+    try {
+      await deleteLocalDraft(draftId);
+      setLocalDrafts(old => old.filter(item => item.id !== draftId));
+      setMessage('已刪除本機事件暫存。');
+    } catch (err) { setMessage(err instanceof Error ? err.message : '刪除暫存失敗。'); }
   }
 
   async function saveEvent(e: React.FormEvent) {
@@ -815,26 +875,12 @@ function App() {
     setLocalDrafts(current => current.filter(draft => remainingMs(draft.createdAt, clockNow) > 0));
     void Promise.all(expired.map(draft => deleteLocalDraft(draft.id).catch(() => {})));
   }, [clockNow, localDrafts]);
-  const wasRemoteOnline = useRef(false);
-  const reconnectAttemptedIds = useRef(new Set<string>());
   useEffect(() => {
-    if (!remoteOnline) { wasRemoteOnline.current = false; reconnectAttemptedIds.current.clear(); return; }
-    if (!token || !user) return;
-    const justReconnected = !wasRemoteOnline.current;
-    wasRemoteOnline.current = true;
-    if (justReconnected) reconnectAttemptedIds.current.clear();
-    const queuedForImmediateRetry = localDrafts.find(draft => draft.syncStatus === 'queued' && !reconnectAttemptedIds.current.has(draft.id) && remainingMs(draft.createdAt, Date.now()) > 0);
-    if (queuedForImmediateRetry) {
-      reconnectAttemptedIds.current.add(queuedForImmediateRetry.id);
-      void uploadLocalWork(queuedForImmediateRetry);
-    }
-    const retryQueued = () => {
-      const queued = localDrafts.find(draft => draft.syncStatus === 'queued' && remainingMs(draft.createdAt, Date.now()) > 0);
-      if (queued) void uploadLocalWork(queued);
-    };
-    const timer = window.setInterval(retryQueued, 15000);
+    if (!remoteOnline || !token || !user) return;
+    const timer = window.setInterval(() => startNextQueuedUpload(), 15000);
+    window.setTimeout(() => startNextQueuedUpload(), 0);
     return () => window.clearInterval(timer);
-  }, [remoteOnline, token, user, localDrafts]);
+  }, [remoteOnline, token, user]);
   const tabs = useMemo(() => {
     const base: [string,string][] = user?.role === 'admin'
       ? [['notifications', '通知'], ['users', '用戶管理'], ['device-work', '設備工作記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]
@@ -932,8 +978,8 @@ function App() {
         <article className="panel"><div className="admin-heading"><div><h2>手機暫存事件</h2><p className="muted">尚未上傳：{localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div></div>
           {!localDrafts.some(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">尚無 24 小時內的已暫存事件。</p> : localDrafts.filter(draft => (!draft.syncStatus || draft.syncStatus === 'draft') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · 尚未上傳</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions"><button disabled={busy} onClick={()=>void uploadLocalWork(draft)}>上傳至後台</button><button className="danger compact" disabled={busy} onClick={()=>void deleteLocalWork(draft.id)}>刪除暫存</button></div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(draft.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div></div>)}
         </article>
-        <article className="panel"><div className="admin-heading"><div><h2>待上傳事件</h2><p className="muted">中斷或等待重試：{localDrafts.filter(draft => ['queued','uploading','failed'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div></div>
-          {!localDrafts.some(draft => ['queued','uploading','failed'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">目前沒有待上傳事件。</p> : localDrafts.filter(draft => ['queued','uploading','failed'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · {draft.syncStatus === 'queued' ? '等待連線，恢復後自動重試' : draft.syncStatus === 'uploading' ? '上傳中斷後待重新確認' : '上次上傳失敗，可手動重試'}</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions"><button disabled={busy || !remoteOnline} onClick={()=>void uploadLocalWork(draft)}>立即重試／上傳</button><button className="danger compact" disabled={busy} onClick={()=>void deleteLocalWork(draft.id)}>刪除暫存</button></div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(draft.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div></div>)}
+        <article className="panel"><div className="admin-heading"><div><h2>上傳事件隊列</h2><p className="muted">中斷或等待重試：{localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).length} 項</p></div></div>
+          {!localDrafts.some(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0) ? <p className="muted">目前沒有排程中的事件。</p> : localDrafts.filter(draft => ['queued','uploading','failed','cancelled'].includes(draft.syncStatus || '') && remainingMs(draft.createdAt, clockNow) > 0).map(draft=><div className="work-event-card" key={draft.id}><div className="list-heading"><strong>{draft.title}</strong><small>{draft.eventDate || draft.createdAt}</small></div><p className="event-code">事件編號：{draft.eventCode || '上傳時補發'}</p><p className="muted">{draft.content || '（沒有備註）'}</p><p className="muted">附件：{draft.media.length} 個 · {draft.syncStatus === 'queued' ? '已排程，依事件編號順序等待上傳' : draft.syncStatus === 'uploading' ? '正在上傳；可取消本次上傳' : draft.syncStatus === 'cancelled' ? '已取消排程，可繼續上傳或刪除暫存' : '上次上傳失敗，已暫停；可繼續上傳或刪除暫存'}</p>{draft.media.length > 0 && <div className="media-list">{draft.media.map((m,i)=>{const key=draftAttachmentKey(draft.id,i,m);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={m.id || key}><div className="attachment-row"><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, draft.createdAt)}>{m.kind === 'video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}</div>}<div className="actions queue-actions">{draft.syncStatus === 'uploading' || draft.syncStatus === 'queued' ? <button className="secondary compact" onClick={()=>void cancelLocalWork(draft)}>取消上傳</button> : <><button className="secondary compact" onClick={()=>void continueLocalWork(draft)}>繼續上傳</button><button className="danger compact" onClick={()=>void deleteLocalWork(draft.id)}>刪除暫存</button></>}</div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(draft.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(draft.createdAt, clockNow).percent}%`}} /></div></div></div>)}
         </article>
         <article className="panel"><h2>已上傳事件</h2><p className="muted">只顯示目前登入客戶端已上傳至系統的工作記錄。點擊附件會在頁面內開啟預覽，不會離開目前畫面。</p>{!uploadedWork.some(item => remainingMs(item.createdAt, clockNow) > 0) ? <p className="muted">尚無 24 小時內的已上傳事件。</p> : uploadedWork.filter(item => remainingMs(item.createdAt, clockNow) > 0).map(item=><div className="work-event-card" key={item.id}><div className="list-heading"><strong>{item.title}</strong><small>{item.eventDate || item.createdAt}</small></div>{item.eventCode && <p className="event-code">事件編號：{item.eventCode}</p>}<p className="muted">{item.content || '（沒有備註）'}</p><div className="media-list">{(item.media || []).map((m,i)=><div className="attachment-row" key={m.id || i}><button type="button" className="media-open-button attachment-open" onClick={()=>openMediaViewer(m, item.createdAt)}>{m.kind==='video' || m.mimeType?.startsWith('video/') ? '▶ 影片' : '檢視圖片'}：{m.originalName || m.name || ('附件 '+(i+1))}</button><span className="attachment-file-size">({((m.size || 0)/1024/1024).toFixed(1)}MB)</span></div>)}</div><div className="expiry-countdown"><span className="expiry-label">本地保存期間：{countdownLabel(item.createdAt, clockNow).label}</span><div className="expiry-track" aria-label="本地保存剩餘時間"><span style={{width:`${countdownLabel(item.createdAt, clockNow).percent}%`}} /></div></div></div>)}</article>
       </section>}

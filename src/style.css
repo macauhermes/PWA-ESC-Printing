@@ -195,9 +195,9 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 @media(max-width:600px){
   .mobile-header-meta-row{display:flex!important;flex-flow:row nowrap!important;align-items:center;justify-content:flex-start;gap:6px;width:100%;max-width:100%;min-width:0;margin-top:5px;overflow:hidden;white-space:nowrap;font-size:10px;line-height:1.2;text-align:left;}
   .mobile-header-meta-row *{box-sizing:border-box;white-space:nowrap;}
-  .mobile-header-system{display:flex!important;flex:1 1 0%;width:0;max-width:none;min-width:0;align-items:center;justify-content:flex-start;gap:5px;overflow:hidden;}
+  .mobile-header-system{display:flex!important;flex:0 1 auto;width:auto;max-width:100%;min-width:0;align-items:center;justify-content:flex-start;gap:5px;overflow:hidden;}
   .mobile-header-system .meta-version,.mobile-header-system .meta-environment{display:block;flex:0 0 auto;min-width:0;}
-  .mobile-header-system .device-code-meta{display:block;flex:1 1 auto;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;}
+  .mobile-header-system .device-code-meta{display:block;flex:0 1 auto;min-width:0;max-width:90px;overflow:hidden;text-overflow:ellipsis;}
   .mobile-header-user{display:flex!important;flex:0 1 auto;align-items:center;justify-content:flex-start;gap:5px;min-width:0;max-width:48%;margin:0;overflow:hidden;}
   .mobile-header-user .mobile-username{display:block;flex:0 1 58px;width:58px;max-width:58px;min-width:0;overflow:hidden;text-overflow:ellipsis;}
   .mobile-header-user .mobile-header-storage{position:relative;display:flex!important;flex:0 0 auto;align-items:center;justify-content:flex-start;gap:3px;min-width:0;margin:0;overflow:visible;}

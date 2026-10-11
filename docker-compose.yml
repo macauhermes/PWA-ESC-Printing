@@ -1,4 +1,22 @@
 services:
+  # Compose creates missing ./app-data and ./app-uploads bind-mount directories.
+  # This one-shot step makes their top-level directories writable by the node user (UID 1000).
+  init-storage:
+    image: alpine:3.22
+    user: "0:0"
+    restart: "no"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        mkdir -p /app/data /app/uploads
+        chown 1000:1000 /app/data /app/uploads
+        if [ -f /app/data/app.sqlite ]; then chown 1000:1000 /app/data/app.sqlite; fi
+    volumes:
+      - ./app-data:/app/data
+      - ./app-uploads:/app/uploads
+
   app:
     build:
       context: .
@@ -6,6 +24,9 @@ services:
     image: pwa-esc-printing:latest
     container_name: pwa-esc-printing
     restart: unless-stopped
+    depends_on:
+      init-storage:
+        condition: service_completed_successfully
     env_file:
       - .env
     environment:

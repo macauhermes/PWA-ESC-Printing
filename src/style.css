@@ -313,3 +313,6 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 .notification-read button{white-space:nowrap}
 .notification-body{margin:12px 0;white-space:pre-wrap;overflow-wrap:anywhere}
 .notification-footer{padding-top:9px;border-top:1px solid #edf0f5;font-size:12px}
+
+.notification-list-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+@media(max-width:800px){.notification-list-actions{align-items:flex-end;flex-direction:column;gap:8px}.notification-list-actions button{max-width:100%}}

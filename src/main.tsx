@@ -972,7 +972,7 @@ function App() {
           <label>ESC/POS 字碼表索引（依打印機手冊）<input type="number" min="0" max="255" value={codePageIndex} onChange={e => setCodePageIndex(e.target.value)} /></label>
           <p className="hint">測試收據使用模擬商品與付款金額，不代表真實交易。文字以 Big5 編碼；不同打印機的 Big5 code page 編號可能不同。</p>
           <div className="actions"><button className="secondary" type="button" onClick={() => setShowReceiptPreview(true)}>預覽</button><button disabled={busy || !printer?.characteristic} onClick={() => void printTest()}>{busy ? '打印中…' : '打印測試'}</button></div></article>
-      </section>
+      </section>}
       {showReceiptPreview && <div className="storage-popup-overlay" role="presentation" onClick={() => setShowReceiptPreview(false)}><section className="storage-popup receipt-preview-popup" role="dialog" aria-modal="true" aria-label="測試付款收據預覽" onClick={event => event.stopPropagation()}>
         <div className="storage-capacity-heading"><strong>測試付款收據預覽</strong><button type="button" className="storage-popup-close" aria-label="關閉預覽" onClick={() => setShowReceiptPreview(false)}>×</button></div>
         <div className="receipt-preview">

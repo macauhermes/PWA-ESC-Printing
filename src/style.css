@@ -298,3 +298,6 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 /* Profile forms and registered-device administration */
 .admin-profile-details{margin-top:8px;min-width:220px;max-width:360px}.admin-profile-details summary{cursor:pointer;color:#1d4ed8;font-size:12px;font-weight:650;padding:6px 0}.admin-profile-details form{padding:10px;border:1px solid #e4e8f0;border-radius:10px;background:#f8fafc}.admin-profile-details label{font-size:12px}.admin-profile-details input{font-size:16px;padding:9px}.registered-device-user{padding:8px 0;border-bottom:1px solid #edf0f5;min-width:180px}.registered-device-user:last-child{border-bottom:0}.registered-device-user small{display:block;color:#667085;margin-top:3px}.admin-layout details summary{overflow-wrap:anywhere}
+
+/* Clickable links between user and registered-device detail pages */
+.text-link{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;color:#1d4ed8;padding:2px 0;margin:0;text-align:left;text-decoration:underline;text-underline-offset:3px;cursor:pointer;font:inherit;overflow-wrap:anywhere}.text-link:hover{color:#1e40af}.text-link:focus-visible{outline:2px solid #2563eb;outline-offset:3px;border-radius:3px}

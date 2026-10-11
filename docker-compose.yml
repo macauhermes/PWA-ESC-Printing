@@ -10,6 +10,7 @@ services:
       - .env
     environment:
       NODE_ENV: production
+      APP_ENV: production
       PORT: "8787"
       APP_ORIGIN: https://pwa.jasonhoi.com
       RP_ID: pwa.jasonhoi.com

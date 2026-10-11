@@ -872,14 +872,34 @@ function App() {
             const selectedFiles=Array.from(e.target.files || []);
             const oversized=selectedFiles.filter(file=>file.size>MAX_ATTACHMENT_BYTES);
             const validFiles=selectedFiles.filter(file=>file.size<=MAX_ATTACHMENT_BYTES);
-            const acceptedFiles=validFiles.slice(0,20);
-            setWorkMedia(acceptedFiles);
+            const fileIdentity=(file:File)=>[file.name,file.size,file.lastModified,file.type].join('::');
+            const knownFiles=new Set(workMedia.map(fileIdentity));
+            const additions:File[]=[];
+            let duplicateCount=0;
+            let limitCount=0;
+            for(const file of validFiles){
+              const identity=fileIdentity(file);
+              if(knownFiles.has(identity)){duplicateCount++;continue;}
+              if(workMedia.length+additions.length>=20){limitCount++;continue;}
+              knownFiles.add(identity);
+              additions.push(file);
+            }
+            const mergedFiles=[...workMedia,...additions];
+            setWorkMedia(mergedFiles);
             e.target.value='';
-            setAttachmentUploadStatuses(old=>{const next={...old};Object.keys(next).filter(key=>key.startsWith('form:')).forEach(key=>delete next[key]);acceptedFiles.forEach((file,index)=>{next[formAttachmentKey(file,index)]='pending';});return next;});
+            setAttachmentUploadStatuses(old=>{
+              const next={...old};
+              additions.forEach(file=>{
+                const index=mergedFiles.indexOf(file);
+                next[formAttachmentKey(file,index)]='pending';
+              });
+              return next;
+            });
             const issues:string[]=[];
             if(oversized.length) issues.push('超過 500 MiB 上限：'+oversized.map(file=>file.name+'（'+(file.size/1024/1024).toFixed(1)+' MiB）').join('、'));
-            if(selectedFiles.length>20) issues.push('每個事件最多 20 個附件；已保留前 20 個合規附件。');
-            setMessage(issues.length ? '部分附件未加入：'+issues.join('；') : '');
+            if(duplicateCount) issues.push('已略過 '+duplicateCount+' 個重複附件。');
+            if(limitCount) issues.push('每個事件最多 20 個附件；已保留先前選取及新增的前 20 個合規附件。');
+            setMessage(issues.length ? '附件選取結果：'+issues.join('；') : (additions.length ? '已追加 '+additions.length+' 個新附件。' : '沒有新增附件；已保留先前選取的文件。'));
           }} /></label><p className="muted">已選取 {workMedia.length} 個附件；每個事件最多 20 個圖片／影片，單一檔案上限 500 MiB（約 524 MB）。</p>
           {workMedia.map((file,i)=>{const key=formAttachmentKey(file,i);const status=attachmentUploadStatuses[key] || 'pending';const percent=attachmentUploadPercents[key] ?? 0;return <div className="attachment-progress-item" key={key}><div className="attachment-row"><span className="attachment-name">{file.type.startsWith('video/') || /\.(mov|mp4|m4v|3gp|3g2|webm|mkv|avi|mts|m2ts)$/i.test(file.name)?'影片':'圖片'}：{file.name}（{(file.size/1024/1024).toFixed(1)} MB）</span><span className={`attachment-status status-${status}`}>{status==='uploading'?<><span className="loading-spinner small-spinner" />上傳中 {percent}%</>:status==='uploaded'?'已上傳 100%':status==='failed'?'上傳失敗':'待上傳'}</span></div>{(status==='uploading'||status==='uploaded'||status==='failed')&&<div className="attachment-progress-track"><span className={`attachment-progress-fill status-${status}`} style={{width:`${status==='uploaded'?100:percent}%`}} /></div>}</div>})}<div className="actions"><button type="submit" disabled={busy || !workTitle.trim()}>暫存於手機</button><button type="button" disabled={busy || !workTitle.trim()} onClick={()=>void uploadCurrentWork()}>上傳事件及附件</button></div></form>
           <p className="hint">手機暫存只保存在目前瀏覽器／裝置；清除網站資料或更換裝置可能導致暫存遺失。暫存內容不會出現在後台，直到按下「上傳系統」。</p>

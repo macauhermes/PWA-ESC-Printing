@@ -36,12 +36,12 @@
 ```bash
 npm install
 cp .env.example .env
-npm run db:init
 npm run dev
 ```
 
 - Vite 前端：`http://localhost:5173`
 - API：`http://localhost:8787`
+- SQLite 資料夾及資料表會在 API 啟動時自動建立；一般本機啟動不必先執行 `npm run db:init`。此指令仍保留作為手動初始化／檢查用途。
 - 預設允許自行註冊 Passkey。一般用戶在登入頁輸入 3–40 字元使用者名稱及顯示名稱，按「註冊 Passkey」，完成裝置生物辨識/安全金鑰流程，再使用同一使用者名稱登入。
 - 一般用戶可公開註冊 Passkey，不需要管理員預先建立帳戶。
 - 唯一管理員使用 `.env` 中的 `ADMIN_USERNAME` 與 `ADMIN_PASSWORD` 固定帳密，僅桌面版顯示管理員登入選項；管理 API 也會拒絕以 Passkey 登入的管理員工作階段及常見手機 User-Agent。
@@ -98,13 +98,11 @@ docker network ls
 docker network create db_default
 ```
 
-建立與 `docker-compose.yml` 同層的資料目錄（請確保 Docker 執行帳號對這些目錄有讀寫權限）：
+**不需要預先建立 `app-data` 或 `app-uploads`，也不需要在 Docker Compose 啟動前執行 `npm run db:init`。** Compose 會自動建立缺少的 bind-mount 來源目錄；`init-storage` 一次性服務會在應用程式啟動前設定資料目錄權限。API 匯入 `server/db.ts` 時會自動建立 SQLite 資料夾及資料表／遷移，因此 Docker 部署的初始化由容器啟動流程完成。
 
-```bash
-mkdir -p ./app-data ./app-uploads
-```
+正常首次部署或重建時直接執行：
 
-**若是從舊版 named volumes 升級，請先備份並把舊 volume 內容複製到這兩個目錄，再啟動新版 Compose。** 否則新掛載的空目錄會遮蔽舊 volume 中的資料，應用程式會看不到原有 SQLite 與上傳檔案。先用 `docker volume ls` 找出舊 volume 的實際名稱（通常是 `<Compose專案名>_app-data` 和 `<Compose專案名>_app-uploads`），並在停止應用程式後複製，例如把下列佔位名稱換成實際名稱：
+**重要：若是從舊版 Docker named volumes 升級到主機目錄掛載，仍必須先備份並把舊 volume 內容複製到 `./app-data` 和 `./app-uploads`。** 自動建立目錄不會自動搬移舊 volume 的資料；若直接啟動，應用程式可能會使用新建的空資料目錄。先用 `docker volume ls` 找出舊 volume 的實際名稱（通常是 `<Compose專案名>_app-data` 和 `<Compose專案名>_app-uploads`），並在停止應用程式後複製，例如把下列佔位名稱換成實際名稱：
 
 ```bash
 docker compose down

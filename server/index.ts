@@ -445,8 +445,29 @@ app.post('/api/work/chunk', auth, chunkUpload.single('chunk'), (req: any, res) =
   const totalChunks = Number(req.body.totalChunks);
   const totalSize = Number(req.body.totalSize);
   const chunkSize = Number(req.body.chunkSize);
-  if (!/^[0-9a-f-]{36}$/i.test(uploadId) || !req.file || !Number.isInteger(index) || !Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 3200 || index < 0 || index >= totalChunks || !Number.isInteger(totalSize) || totalSize < 1 || totalSize > 500 * 1024 * 1024 || chunkSize !== 160 * 1024 || !/^(image|video)\//i.test(mimeType)) {
-    return res.status(400).json({ error: '附件分段資料無效，請重新選擇影片或圖片後重試。' });
+  const maxAttachmentBytes = 500 * 1024 * 1024;
+  const expectedChunkSize = 160 * 1024;
+  const validationErrors:string[] = [];
+  if (!/^[0-9a-f-]{36}$/i.test(uploadId)) validationErrors.push('上傳識別碼格式不正確');
+  if (!req.file) validationErrors.push('伺服器未收到分段檔案');
+  if (!Number.isInteger(index)) validationErrors.push('分段索引不是有效整數');
+  if (!Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 3200) validationErrors.push('分段總數必須介乎 1 至 3200');
+  if (Number.isInteger(totalChunks) && Number.isInteger(index) && (index < 0 || index >= totalChunks)) validationErrors.push('分段索引超出分段總數範圍');
+  if (!Number.isInteger(totalSize) || totalSize < 1) validationErrors.push('宣告檔案大小不是有效正整數');
+  else if (totalSize > maxAttachmentBytes) validationErrors.push('檔案超過 500 MiB 單檔上限');
+  if (chunkSize !== expectedChunkSize) validationErrors.push('分段大小設定不一致（預期 160 KiB）');
+  if (!/^(image|video)\//i.test(mimeType)) validationErrors.push('附件 MIME type 無效或不受支援');
+  if (Number.isInteger(totalSize) && totalSize > 0 && totalSize <= maxAttachmentBytes && chunkSize === expectedChunkSize && Number.isInteger(totalChunks) && totalChunks > 0) {
+    const expectedTotalChunks = Math.ceil(totalSize / expectedChunkSize);
+    if (totalChunks !== expectedTotalChunks) validationErrors.push('分段總數不符（預期 ' + expectedTotalChunks + ' 段，收到 ' + totalChunks + ' 段）');
+    if (req.file && Number.isInteger(index) && index >= 0 && index < totalChunks) {
+      const expectedBytes = index === totalChunks - 1 ? totalSize - index * expectedChunkSize : expectedChunkSize;
+      if (req.file.size !== expectedBytes) validationErrors.push('第 ' + (index + 1) + ' 段大小不符（預期 ' + expectedBytes + ' bytes，收到 ' + req.file.size + ' bytes）');
+    }
+  }
+  if (validationErrors.length) {
+    console.warn('[work/chunk] rejected invalid upload metadata', { reasons:validationErrors, uploadId, index, totalChunks, totalSize, chunkSize, receivedChunkBytes:req.file?.size ?? null, mimeType });
+    return res.status(400).json({ error: '附件分段資料無效（' + validationErrors.join('；') + '）。請重新選擇影片或圖片後重試。' });
   }
   const tempPath = path.join(chunkDir, uploadId + '.part');
   try {

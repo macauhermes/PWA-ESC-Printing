@@ -66,7 +66,7 @@ function uploadFormDataWithProgress(path: string, token: string, data: FormData,
   });
 }
 type WorkUploadFields = { title:string; content:string; eventDate:string; eventCode:string; createdAt:string };
-async async function uploadWorkInChunks(token:string, fields:WorkUploadFields, media:WorkUploadMedia[], onProgress:(progress:UploadProgress)=>void, onStatus:(key:string,status:AttachmentUploadStatus)=>void) {
+async function uploadWorkInChunks(token:string, fields:WorkUploadFields, media:WorkUploadMedia[], onProgress:(progress:UploadProgress)=>void, onStatus:(key:string,status:AttachmentUploadStatus)=>void) {
   const totalBytes = media.reduce((sum,file)=>sum+file.blob.size,0);
   const uploadedMediaIds:string[] = [];
   let completedBytes = 0;

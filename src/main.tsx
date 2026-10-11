@@ -50,6 +50,8 @@ function uploadFormDataWithProgress(path: string, token: string, data: FormData,
     const xhr = new XMLHttpRequest();
     xhr.open('POST', '/api' + path);
     xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.timeout = 60000;
+    xhr.ontimeout = () => reject(new Error('附件上傳逾時（60 秒）。請檢查遠端伺服器／代理限制後重試。'));
     xhr.upload.onprogress = event => {
       const snapshot = { loaded: event.loaded, total: event.lengthComputable ? event.total : 0, percent: event.lengthComputable && event.total > 0 ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null, bytesPerSecond: 0 };
       window.requestAnimationFrame(() => onProgress(snapshot));

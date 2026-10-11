@@ -47,3 +47,12 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 
 .version-label{display:block;margin-top:5px;color:#94a3b8;font-size:12px;font-weight:650;letter-spacing:0}.update-required h1{margin:22px 0 12px}.update-required p{line-height:1.7;color:#475569}.update-required .version-label{color:#64748b}
 @media(max-width:600px){.topbar{align-items:flex-start;gap:12px;flex-wrap:wrap}.topbar>div:first-child{min-width:0}.version-label{font-size:11px}.account{gap:7px}}
+
+
+/* Local PWA storage capacity estimate and conservative fallback cap */
+.storage-capacity{margin:12px 0 16px;padding:12px;border:1px solid #dbeafe;border-radius:10px;background:#f8fbff;color:#334155}
+.storage-capacity-heading{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:13px}
+.storage-capacity p{margin:8px 0;font-size:12px;color:#475569}
+.storage-capacity progress{display:block;width:100%;height:8px;margin:8px 0;accent-color:#2563eb}
+.storage-capacity small{display:block;color:#64748b;font-size:11px;line-height:1.5}
+.storage-capacity .storage-warning{padding:8px;margin-top:8px;border-radius:7px;background:#fff7ed;color:#9a3412;font-weight:650}

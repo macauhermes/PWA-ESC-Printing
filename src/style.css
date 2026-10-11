@@ -320,3 +320,9 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 /* Desktop header version; mobile already shows it in the metadata row. */
 .desktop-system-version{display:block;color:#9ca3af;font-size:12px;line-height:1.4;margin-top:5px}
 @media(max-width:600px){.desktop-system-version{display:none}}
+
+
+/* Unread notification count in the client navigation. */
+.tabs .notification-unread-bubble{display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:19px;margin-left:6px;padding:0 5px;border-radius:999px;background:#2563eb;color:#fff;font-size:11px;font-weight:700;line-height:1;vertical-align:middle}
+.notification-subscription-actions{display:flex;align-items:center;justify-content:flex-start;gap:8px;flex-wrap:wrap}
+@media(max-width:600px){.notification-subscription-actions{align-items:center;flex-direction:row;justify-content:flex-start}.notification-subscription-actions button{width:auto;max-width:100%}}

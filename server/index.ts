@@ -61,7 +61,7 @@ const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 const audit = (user: any, action: string, type?: string, entityId?: string, detail?: unknown) =>
   db.prepare('INSERT INTO audit_log(user_id,username,action,entity_type,entity_id,detail) VALUES(?,?,?,?,?,?)')
     .run(user?.id || null, user?.username || null, action, type || null, entityId || null, detail ? JSON.stringify(detail) : null);
-const publicUser = (u: any) => ({ id: u.id, username: u.username, displayName: u.username, role: u.role });
+const publicUser = (u: any) => ({ id: u.id, username: u.username, displayName: u.display_name || u.username, role: u.role, employeeNumber: u.employee_number || '', employeeName: u.employee_name || '', contactPhone: u.contact_phone || '', contactEmail: u.contact_email || '' });
 const auth = (req: any, res: any, next: any) => {
   const token = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'Authentication required' });
@@ -153,6 +153,7 @@ app.post('/api/auth/register/verify', async (req, res) => {
     db.prepare('INSERT OR REPLACE INTO passkeys(credential_id,user_id,public_key,counter,transports) VALUES(?,?,?,?,?)')
       .run(cred.id, user.id, Buffer.from(cred.publicKey).toString('base64url'), cred.counter || 0, JSON.stringify(cred.transports || response.response?.transports || []));
     const deviceCode = getDeviceCode(clientId);
+    db.prepare('INSERT INTO user_devices(user_id,client_id) VALUES(?,?) ON CONFLICT(user_id,client_id) DO UPDATE SET last_seen=CURRENT_TIMESTAMP').run(user.id, clientId);
     audit(publicUser(user), 'auth.passkey_registered', 'user', user.id, { clientId, deviceCode });
     res.json({ verified: true, deviceCode, clientId });
   } catch (e) { res.status(400).json({ error: e instanceof Error ? e.message : 'Registration failed' }); }
@@ -192,6 +193,7 @@ app.post('/api/auth/login/verify', async (req, res) => {
     const token = crypto.randomBytes(32).toString('base64url');
     const clientId = String(req.body.clientId || '').slice(0, 128) || crypto.randomUUID();
     const deviceCode = getDeviceCode(clientId);
+    db.prepare('INSERT INTO user_devices(user_id,client_id) VALUES(?,?) ON CONFLICT(user_id,client_id) DO UPDATE SET last_seen=CURRENT_TIMESTAMP').run(user.id, clientId);
     db.prepare('INSERT INTO sessions(token_hash,user_id,client_id,expires_at) VALUES(?,?,?,?)').run(hash(token), user.id, clientId, Date.now() + 7 * 24 * 60 * 60_000);
     db.prepare('INSERT INTO login_events(user_id,username,event,success,detail) VALUES(?,?,?,1,?)').run(user.id, user.username, 'login', 'WebAuthn passkey verified');
     audit(publicUser(user), 'auth.login_success', 'user', user.id);
@@ -246,6 +248,22 @@ app.get('/api/me', auth, (req: any, res) => {
   if (user.role === 'admin' && req.user.login_type !== 'admin_password') user.role = 'user';
   res.json({ user });
 });
+app.put('/api/me', auth, requireRegularUser, (req: any, res) => {
+  const displayName = String(req.body.displayName || '').trim().slice(0, 100);
+  const employeeNumber = String(req.body.employeeNumber ?? '').trim();
+  const employeeName = String(req.body.employeeName || '').trim().slice(0, 100);
+  const contactPhone = String(req.body.contactPhone || '').trim().slice(0, 40);
+  const contactEmail = String(req.body.contactEmail || '').trim().slice(0, 254);
+  if (!displayName) return res.status(400).json({ error: '顯示名稱不可留空。' });
+  if (!/^[0-9]+$/.test(employeeNumber)) return res.status(400).json({ error: '員工編號必須填寫，而且只允許 0-9 數字。' });
+  if (contactEmail && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(contactEmail)) return res.status(400).json({ error: '電郵格式不正確。' });
+  const duplicate = db.prepare('SELECT id FROM users WHERE employee_number=? AND id<>?').get(employeeNumber, req.user.id);
+  if (duplicate) return res.status(409).json({ error: '此員工編號已被其他帳戶使用。' });
+  db.prepare('UPDATE users SET display_name=?,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?').run(displayName, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, req.user.id);
+  const updated = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id) as any;
+  audit(updated, 'user.profile_updated', 'user', updated.id, { fields: ['displayName','employeeNumber','employeeName','contactPhone','contactEmail'] });
+  res.json({ user: publicUser(updated) });
+});
 
 app.post('/api/client/heartbeat', auth, (req: any, res) => {
   const clientId = String(req.body.clientId || req.user.client_id || '').slice(0, 128);
@@ -279,11 +297,25 @@ app.get('/api/audit', auth, requireAdmin, (req: any, res) => {
 
 // Administrator console APIs. Client heartbeats and dashboard refreshes run every 3 seconds.
 app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
-  const users = db.prepare(`SELECT u.id,u.username,u.display_name AS displayName,u.role,u.created_at AS createdAt,
+  const users = db.prepare(`SELECT u.id,u.username,u.display_name AS displayName,u.employee_number AS employeeNumber,
+    u.employee_name AS employeeName,u.contact_phone AS contactPhone,u.contact_email AS contactEmail,u.role,u.created_at AS createdAt,
     (SELECT COUNT(*) FROM passkeys p WHERE p.user_id=u.id) AS passkeyCount,
     (SELECT COUNT(*) FROM sessions s WHERE s.user_id=u.id AND s.expires_at>?) AS activeSessions,
     (SELECT MAX(le.created_at) FROM login_events le WHERE le.user_id=u.id AND le.event='login' AND le.success=1) AS lastLogin
-    FROM users u ORDER BY u.created_at DESC`).all(Date.now());
+    FROM users u ORDER BY u.created_at DESC`).all(Date.now()) as any[];
+  const userDeviceLinks = db.prepare(`SELECT ud.user_id AS userId,cd.client_id AS clientId,cd.device_code AS deviceCode,
+    ud.registered_at AS registeredAt,ud.last_seen AS lastSeen FROM user_devices ud JOIN client_devices cd ON cd.client_id=ud.client_id
+    ORDER BY ud.registered_at DESC`).all() as any[];
+  for (const item of users) item.linkedDevices = userDeviceLinks.filter(link => link.userId === item.id);
+  const devices = db.prepare(`SELECT cd.client_id AS clientId,cd.device_code AS deviceCode,cd.created_at AS createdAt,
+    CASE WHEN cs.online=1 AND datetime(cs.last_seen)>=datetime('now','-10 seconds') THEN 1 ELSE 0 END AS online,
+    cs.last_seen AS lastSeen,cs.user_agent AS userAgent,cs.app_version AS appVersion,cs.app_environment AS appEnvironment,
+    (SELECT COUNT(*) FROM user_devices ud WHERE ud.client_id=cd.client_id) AS userCount
+    FROM client_devices cd LEFT JOIN client_status cs ON cs.client_id=cd.client_id ORDER BY cd.created_at DESC`).all() as any[];
+  for (const device of devices) device.registeredUsers = userDeviceLinks.filter(link => link.clientId === device.clientId).map(link => {
+    const item = users.find(candidate => candidate.id === link.userId);
+    return item ? { id: item.id, username: item.username, displayName: item.displayName, registeredAt: link.registeredAt, lastSeen: link.lastSeen } : null;
+  }).filter(Boolean);
   const clients = db.prepare(`SELECT c.client_id AS clientId,c.user_id AS userId,c.username,
     CASE WHEN c.online=1 AND datetime(c.last_seen)>=datetime('now','-10 seconds') THEN 1 ELSE 0 END AS online,
     c.bluetooth_supported AS bluetoothSupported,c.bluetooth_connected AS bluetoothConnected,
@@ -297,7 +329,7 @@ app.get('/api/admin/dashboard', auth, requireAdmin, (_req: any, res) => {
     FROM client_work w ORDER BY w.created_at DESC`).all() as any[];
   const workMedia = db.prepare('SELECT id,work_id AS workId,kind,original_name AS originalName,mime_type AS mimeType,filename,created_at AS createdAt FROM work_media ORDER BY created_at').all() as any[];
   for (const work of deviceWork) work.media = workMedia.filter(m => m.workId === work.id).map(m => ({ ...m, url: '/uploads/' + m.filename }));
-  res.json({ users, clients, operations, jobs, deviceWork, appVersion, appEnvironment, serverTime: new Date().toISOString() });
+  res.json({ users, clients, devices, operations, jobs, deviceWork, appVersion, appEnvironment, serverTime: new Date().toISOString() });
 });
 app.post('/api/admin/users/:id/role', auth, requireAdmin, (req: any, res) => {
   const role = String(req.body.role || '');
@@ -309,6 +341,24 @@ app.post('/api/admin/users/:id/role', auth, requireAdmin, (req: any, res) => {
   audit(req.user, 'admin.user_role_changed', 'user', target.id, { username: target.username, role });
   res.json({ ok: true });
 });
+app.put('/api/admin/users/:id/profile', auth, requireAdmin, (req: any, res) => {
+  const target = db.prepare('SELECT id,username,role FROM users WHERE id=?').get(req.params.id) as any;
+  if (!target) return res.status(404).json({ error: 'User not found' });
+  if (target.role === 'admin' || (adminUsername && target.username === adminUsername)) return res.status(400).json({ error: 'The configured administrator profile cannot be edited here' });
+  const displayName = String(req.body.displayName || '').trim().slice(0, 100);
+  const employeeNumber = String(req.body.employeeNumber ?? '').trim();
+  const employeeName = String(req.body.employeeName || '').trim().slice(0, 100);
+  const contactPhone = String(req.body.contactPhone || '').trim().slice(0, 40);
+  const contactEmail = String(req.body.contactEmail || '').trim().slice(0, 254);
+  if (!displayName) return res.status(400).json({ error: '顯示名稱不可留空。' });
+  if (!/^[0-9]+$/.test(employeeNumber)) return res.status(400).json({ error: '員工編號必須填寫，而且只允許 0-9 數字。' });
+  if (contactEmail && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(contactEmail)) return res.status(400).json({ error: '電郵格式不正確。' });
+  const duplicate = db.prepare('SELECT id FROM users WHERE employee_number=? AND id<>?').get(employeeNumber, target.id);
+  if (duplicate) return res.status(409).json({ error: '此員工編號已被其他帳戶使用。' });
+  db.prepare('UPDATE users SET display_name=?,employee_number=?,employee_name=?,contact_phone=?,contact_email=? WHERE id=?').run(displayName, employeeNumber, employeeName || null, contactPhone || null, contactEmail || null, target.id);
+  audit(req.user, 'admin.user_profile_updated', 'user', target.id, { username: target.username, fields: ['displayName','employeeNumber','employeeName','contactPhone','contactEmail'] });
+  res.json({ ok: true });
+});
 app.delete('/api/admin/users/:id', auth, requireAdmin, (req: any, res) => {
   const target = db.prepare('SELECT id,username,role FROM users WHERE id=?').get(req.params.id) as any;
   if (!target) return res.status(404).json({ error: 'User not found' });
@@ -317,9 +367,37 @@ app.delete('/api/admin/users/:id', auth, requireAdmin, (req: any, res) => {
   if (target.role === 'admin' && (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin'").get() as any).n <= 1)
     return res.status(400).json({ error: 'At least one administrator must remain' });
   audit(req.user, 'admin.user_deleted', 'user', target.id, { username: target.username });
+  db.prepare('UPDATE login_events SET user_id=NULL WHERE user_id=?').run(target.id);
   db.prepare('DELETE FROM sessions WHERE user_id=?').run(target.id);
   db.prepare('DELETE FROM users WHERE id=?').run(target.id);
   res.json({ ok: true });
+});
+app.delete('/api/admin/devices/:clientId', auth, requireAdmin, (req: any, res) => {
+  const clientId = String(req.params.clientId || '').slice(0, 128);
+  const device = db.prepare('SELECT client_id AS clientId,device_code AS deviceCode FROM client_devices WHERE client_id=?').get(clientId) as any;
+  if (!device) return res.status(404).json({ error: '註冊設備不存在。' });
+  if (req.user.client_id === clientId) return res.status(400).json({ error: '不能刪除目前管理員登入使用的設備。' });
+  const linkedUsers = db.prepare(`SELECT DISTINCT u.id,u.username,u.role FROM users u LEFT JOIN user_devices ud ON ud.user_id=u.id LEFT JOIN sessions s ON s.user_id=u.id AND s.client_id=? LEFT JOIN client_status cs ON cs.user_id=u.id AND cs.client_id=? WHERE ud.client_id=? OR s.client_id=? OR cs.client_id=?`).all(clientId, clientId, clientId, clientId, clientId) as any[];
+  if (linkedUsers.some(item => item.role === 'admin' || (adminUsername && item.username === adminUsername))) return res.status(400).json({ error: '此設備關聯管理員帳戶，為避免鎖定管理系統，不能整台刪除。' });
+  const removeDevice = db.transaction(() => {
+    audit(req.user, 'admin.registration_device_deleted', 'client_device', clientId, { deviceCode: device.deviceCode, deletedUsers: linkedUsers.map(item => item.username) });
+    const media = db.prepare(`SELECT wm.filename FROM work_media wm JOIN client_work cw ON cw.id=wm.work_id WHERE cw.client_id=?`).all(clientId) as { filename:string }[];
+    for (const item of media) { try { fs.unlinkSync(path.join(uploadDir, item.filename)); } catch {} }
+    db.prepare('DELETE FROM client_work WHERE client_id=?').run(clientId);
+    db.prepare('DELETE FROM push_subscriptions WHERE client_id=?').run(clientId);
+    db.prepare('DELETE FROM notification_reads WHERE client_id=?').run(clientId);
+    db.prepare('DELETE FROM notifications WHERE target_client_id=?').run(clientId);
+    db.prepare('DELETE FROM sessions WHERE client_id=?').run(clientId);
+    for (const item of linkedUsers) {
+      db.prepare('UPDATE login_events SET user_id=NULL WHERE user_id=?').run(item.id);
+      db.prepare('DELETE FROM sessions WHERE user_id=?').run(item.id);
+      db.prepare('DELETE FROM users WHERE id=?').run(item.id);
+    }
+    db.prepare('DELETE FROM client_status WHERE client_id=?').run(clientId);
+    db.prepare('DELETE FROM client_devices WHERE client_id=?').run(clientId);
+  });
+  try { removeDevice(); } catch (error) { return res.status(500).json({ error: error instanceof Error ? error.message : '刪除設備失敗。' }); }
+  res.json({ ok: true, deletedUsers: linkedUsers.length, deviceCode: device.deviceCode });
 });
 app.post('/api/admin/clients/:clientId/logout', auth, requireAdmin, (req: any, res) => {
   const clientId = String(req.params.clientId).slice(0,128);

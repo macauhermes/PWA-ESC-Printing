@@ -189,3 +189,40 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
   .mobile-header-storage .storage-meter{flex:0 0 26px;width:26px;min-width:26px;height:18px;min-height:18px;margin:0;padding:0;}
   .mobile-header-storage .storage-tooltip{left:0;right:auto;max-width:calc(100vw - 24px);white-space:normal;}
 }
+
+/* v0.1.2: explicit second-row layout, independent of legacy small/header selectors. */
+.mobile-header-meta-row{display:none;}
+@media(max-width:600px){
+  .mobile-header-meta-row{display:flex!important;flex-flow:row nowrap!important;align-items:center;justify-content:flex-start;gap:6px;width:100%;max-width:100%;min-width:0;margin-top:5px;overflow:hidden;white-space:nowrap;font-size:10px;line-height:1.2;text-align:left;}
+  .mobile-header-meta-row *{box-sizing:border-box;white-space:nowrap;}
+  .mobile-header-system{display:flex!important;flex:1 1 0%;width:0;max-width:none;min-width:0;align-items:center;justify-content:flex-start;gap:5px;overflow:hidden;}
+  .mobile-header-system .meta-version,.mobile-header-system .meta-environment{display:block;flex:0 0 auto;min-width:0;}
+  .mobile-header-system .device-code-meta{display:block;flex:1 1 auto;min-width:0;max-width:none;overflow:hidden;text-overflow:ellipsis;}
+  .mobile-header-user{display:flex!important;flex:0 1 auto;align-items:center;justify-content:flex-start;gap:5px;min-width:0;max-width:48%;margin:0;overflow:hidden;}
+  .mobile-header-user .mobile-username{display:block;flex:0 1 58px;width:58px;max-width:58px;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+  .mobile-header-user .mobile-header-storage{position:relative;display:flex!important;flex:0 0 auto;align-items:center;justify-content:flex-start;gap:3px;min-width:0;margin:0;overflow:visible;}
+  .mobile-header-user .storage-label{display:block;flex:0 0 auto;margin:0;}
+  .mobile-header-user .storage-meter{display:block;position:relative;flex:0 0 26px;width:26px;min-width:26px;height:18px;min-height:18px;margin:0;padding:0;}
+  .mobile-header-user .storage-tooltip{position:absolute;left:auto;right:0;top:calc(100% + 5px);z-index:100;max-width:calc(100vw - 24px);white-space:normal;}
+}
+@media(min-width:601px){.mobile-header-meta-row{display:none!important;}}
+
+/* Event management cards and per-attachment upload state */
+.work-event-card{display:block;margin:12px 0;padding:14px;border:1px solid var(--border,#dbe2ea);border-radius:14px;background:var(--panel,#fff);box-shadow:0 2px 8px rgba(15,23,42,.06);min-width:0;}
+.work-event-card:first-child{margin-top:8px;}
+.work-event-card .list-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}
+.work-event-card .list-heading strong{min-width:0;overflow-wrap:anywhere;}
+.attachment-row{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;padding:8px 0;border-bottom:1px solid var(--border,#e5e7eb);}
+.attachment-row:last-child{border-bottom:0;}
+.attachment-name{flex:1 1 auto;min-width:0;overflow-wrap:anywhere;font-size:13px;}
+.attachment-open{flex:1 1 auto;min-width:0;text-align:left;overflow-wrap:anywhere;}
+.attachment-status{display:inline-flex;flex:0 0 auto;align-items:center;gap:5px;padding:3px 7px;border-radius:999px;font-size:11px;font-weight:650;white-space:nowrap;}
+.attachment-status.status-pending{color:#64748b;background:#f1f5f9;}
+.attachment-status.status-uploading{color:#1d4ed8;background:#eff6ff;}
+.attachment-status.status-uploaded{color:#166534;background:#dcfce7;}
+.attachment-status.status-failed{color:#b91c1c;background:#fee2e2;}
+.global-upload-progress{display:flex;align-items:center;gap:10px;padding:10px 16px;}
+.loading-spinner{display:inline-block;width:18px;height:18px;flex:0 0 18px;border:2px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:attachment-spin .75s linear infinite;}
+.small-spinner{width:12px;height:12px;flex-basis:12px;border-width:1.5px;}
+@keyframes attachment-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.loading-spinner{animation-duration:2s;}}

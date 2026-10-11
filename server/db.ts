@@ -56,12 +56,6 @@ CREATE TABLE IF NOT EXISTS user_devices (
   PRIMARY KEY(user_id, client_id)
 );
 CREATE INDEX IF NOT EXISTS idx_user_devices_client ON user_devices(client_id, registered_at DESC);
-// Recover device-to-user links from earlier passkey-registration audit entries.
-db.exec(`INSERT OR IGNORE INTO user_devices(user_id,client_id,registered_at,last_seen)
-  SELECT a.entity_id,CASE WHEN json_valid(a.detail) THEN json_extract(a.detail,'$.clientId') END,COALESCE(a.created_at,CURRENT_TIMESTAMP),COALESCE(a.created_at,CURRENT_TIMESTAMP)
-  FROM audit_log a JOIN client_devices cd ON cd.client_id=CASE WHEN json_valid(a.detail) THEN json_extract(a.detail,'$.clientId') END
-  JOIN users u ON u.id=a.entity_id
-  WHERE a.action='auth.passkey_registered' AND json_valid(a.detail)=1 AND json_extract(a.detail,'$.clientId') IS NOT NULL`);
 CREATE TABLE IF NOT EXISTS client_work (
   id TEXT PRIMARY KEY, client_id TEXT NOT NULL, user_id TEXT NOT NULL, username TEXT NOT NULL,
   title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', event_date TEXT, printer_name TEXT,
@@ -99,6 +93,13 @@ CREATE TABLE IF NOT EXISTS client_status (
 CREATE INDEX IF NOT EXISTS idx_client_status_last_seen ON client_status(last_seen DESC);
 CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL);
 `);
+
+// Recover device-to-user links from earlier passkey-registration audit entries.
+db.exec(`INSERT OR IGNORE INTO user_devices(user_id,client_id,registered_at,last_seen)
+  SELECT a.entity_id,CASE WHEN json_valid(a.detail) THEN json_extract(a.detail,'$.clientId') END,COALESCE(a.created_at,CURRENT_TIMESTAMP),COALESCE(a.created_at,CURRENT_TIMESTAMP)
+  FROM audit_log a JOIN client_devices cd ON cd.client_id=CASE WHEN json_valid(a.detail) THEN json_extract(a.detail,'$.clientId') END
+  JOIN users u ON u.id=a.entity_id
+  WHERE a.action='auth.passkey_registered' AND json_valid(a.detail)=1 AND json_extract(a.detail,'$.clientId') IS NOT NULL`);
 
 const userColumns = db.pragma('table_info(users)') as { name: string }[];
 if (!userColumns.some(c => c.name === 'employee_number')) db.exec('ALTER TABLE users ADD COLUMN employee_number TEXT');

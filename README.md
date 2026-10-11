@@ -2,6 +2,28 @@
 
 繁體中文 PWA：一般用戶 BLE 熱敏打印與模擬付款測試收據、Passkey/WebAuthn 登入、手機本機事件暫存與按需上傳、設備工作記錄及跨平台 Web Push。
 
+## 熱敏打印機的常見連接方式
+
+熱敏收據打印機常見的傳輸方式如下；**傳輸方式是否可用，取決於打印機硬件、通訊協定、瀏覽器／作業系統支援，以及打印機是否接受相應的 ESC/POS 或廠商專用指令**。僅看到藍牙名稱或成功配對，不代表網頁一定可以直接打印。
+
+| 方式 | 基本原理 | 常見優點與限制 |
+| --- | --- | --- |
+| **Bluetooth Low Energy（BLE／GATT）** | 網頁透過 Web Bluetooth 掃描／選取裝置、連接 GATT service，再向可寫入的 characteristic 傳送打印資料。 | 無線、適合近距離移動打印；必須找到打印機支援的 GATT 服務及寫入特徵。瀏覽器支援有限，並非所有 BLE 打印機都使用相同 UUID 或資料協定。 |
+| **Bluetooth Classic（SPP／RFCOMM）** | 以傳統藍牙序列埠方式傳輸資料，常見於通用 ESC/POS 便攜式打印機。 | Android 原生 App 常見，但一般網頁的 Web Bluetooth 不提供 Classic SPP 序列埠連線；iPhone／iPad 通常亦不能直接透過通用 SPP 使用，可能需要廠商 SDK 或 MFi 支援。 |
+| **Wi-Fi／Ethernet（LAN）** | 打印機連接無線網絡或有線區域網絡，客戶端透過打印機支援的網絡協定傳送資料。 | 適合固定位置或多設備共用；需知道網絡設定及打印協定。一般瀏覽器網頁不能任意直接連接所有本地網絡端口，還會受瀏覽器安全限制影響。 |
+| **USB** | 以 USB 線連接手機／電腦，透過作業系統驅動、原生程式或受支援的瀏覽器介面打印。 | 連線穩定，通常適合固定工作站；手機轉接、供電、驅動及瀏覽器支援會因平台而異。一般網頁不能假設可直接控制任意 USB 打印機。 |
+| **廠商 SDK／原生打印服務** | 使用打印機品牌提供的 SDK、驅動或系統打印服務。 | 可支援特定品牌功能及專有協定，但通常需要安裝原生 App／驅動或整合對應 SDK，並非通用網頁方案。 |
+
+### 本項目的實作範圍：只實作 BLE
+
+目前本項目只實作 **BLE（Web Bluetooth + GATT）**，沒有實作 Bluetooth Classic／SPP、Wi-Fi／LAN、USB 或各品牌專用 SDK。打印頁會讓用戶選取 BLE 裝置，嘗試連接已知的常見服務 UUID，並在找到可寫入的 GATT characteristic 後分段傳送測試收據資料；這是通用的基本嘗試，**不代表能相容所有 BLE 打印機**。若打印機使用私有服務 UUID、需要廠商專用封包／握手，或只提供 Classic SPP，便可能無法連接或無法正常打印。
+
+- **Android**：請使用支援 Web Bluetooth 的 Chromium 瀏覽器（例如最新版 Chrome），並以 HTTPS 開啟網站。
+- **iPhone／iPad**：目前 iOS Safari 不支援本項目所需的 Web Bluetooth，因此即使設備有 BLE，也不能透過目前這個網頁實作直接連接打印。將網站加入主畫面不會自動補上 Web Bluetooth 支援。
+- **選購打印機前**：確認規格明確列出 BLE GATT 打印支援，而不只是「Bluetooth」或「Bluetooth 5.x」；最好確認服務／characteristic UUID、資料傳輸方式，以及打印機是否支援所需字元集與 ESC/POS 指令。
+- **打印內容**：目前程式以伺服器轉換 Big5 文字，再透過 BLE characteristic 傳送；打印機仍須支援相符字碼表。不同廠牌的 ESC/POS 子集及 code-page 編號可能不同。
+
+
 ## 功能
 
 - 登入頁、一般用戶及管理員後台均顯示系統版本與環境（測試環境／正式環境）。前端會定期檢查伺服器版本；如版本不同，將要求重新載入新版後才能繼續使用。發布新版本時請同步遞增 `package.json` 的 `version`；測試環境可設定 `VITE_APP_ENV=test` 及伺服器 `APP_ENV=test`，正式環境使用 `APP_ENV=production`。

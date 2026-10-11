@@ -704,8 +704,10 @@ function App() {
       await saveLocalDraft(queued); setLocalDrafts(old => old.map(item => item.id === draft.id ? queued : item));
       setMessage(`遠端未連線，事件 ${draft.eventCode} 保留在本機上傳隊列。`); return;
     }
+    if (uploadingLocalWorkIds.current.size > 0 || uploadingLocalWorkIds.current.has(draft.id)) return;
+    uploadingLocalWorkIds.current.add(draft.id);
     const uploading = { ...draft, syncStatus:'uploading' as const };
-    setBusy(true); setLocalDrafts(old => old.map(item => item.id === draft.id ? uploading : item));
+    setLocalDrafts(old => old.map(item => item.id === draft.id ? uploading : item));
     await saveLocalDraft(uploading).catch(() => {});
     try {
       const queuedMedia:WorkUploadMedia[] = draft.media.map((file,index)=>({file,index})).filter(item=>item.file.blob).map(({file,index})=>({blob:file.blob as Blob,name:file.name || file.originalName || 'attachment',mimeType:mediaMimeType(file.name || file.originalName || 'attachment',file.mimeType || file.blob?.type || ''),key:draftAttachmentKey(draft.id,index,file)}));
@@ -720,7 +722,7 @@ function App() {
       await saveLocalDraft(retained).catch(() => {});
       setLocalDrafts(old => old.map(item => item.id === draft.id ? retained : item));
       setMessage(status === 'queued' ? `事件 ${draft.eventCode} 上傳中斷，已保留在隊列，稍後自動重試。` : (err instanceof Error ? err.message : '上傳失敗；本機事件仍保留，可手動重試。'));
-    } finally { setBusy(false); window.setTimeout(() => setUploadProgress(null), 1200); }
+    } finally { uploadingLocalWorkIds.current.delete(draft.id); window.setTimeout(() => setUploadProgress(null), 1200); }
   }
   async function deleteLocalWork(draftId: string) {
     if (!window.confirm('確定刪除此手機暫存事件？')) return;
@@ -820,18 +822,17 @@ function App() {
     wasRemoteOnline.current = true;
     if (justReconnected) reconnectAttemptedIds.current.clear();
     const queuedForImmediateRetry = localDrafts.find(draft => draft.syncStatus === 'queued' && !reconnectAttemptedIds.current.has(draft.id) && remainingMs(draft.createdAt, Date.now()) > 0);
-    if (!busy && queuedForImmediateRetry) {
+    if (queuedForImmediateRetry) {
       reconnectAttemptedIds.current.add(queuedForImmediateRetry.id);
       void uploadLocalWork(queuedForImmediateRetry);
     }
     const retryQueued = () => {
-      if (busy) return;
       const queued = localDrafts.find(draft => draft.syncStatus === 'queued' && remainingMs(draft.createdAt, Date.now()) > 0);
       if (queued) void uploadLocalWork(queued);
     };
     const timer = window.setInterval(retryQueued, 15000);
     return () => window.clearInterval(timer);
-  }, [remoteOnline, token, user, busy, localDrafts]);
+  }, [remoteOnline, token, user, localDrafts]);
   const tabs = useMemo(() => {
     const base: [string,string][] = user?.role === 'admin'
       ? [['notifications', '通知'], ['users', '用戶管理'], ['device-work', '設備工作記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]

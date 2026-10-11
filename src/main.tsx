@@ -63,7 +63,62 @@ function uploadFormDataWithProgress(path: string, token: string, data: FormData,
     xhr.send(data);
   });
 }
+const WORK_UPLOAD_CHUNK_BYTES = 180 * 1024;
+type ChunkableMedia = { blob: Blob; name: string; mimeType: string };
+async function uploadWorkInChunks(
+  token: string,
+  fields: { title:string; content:string; eventDate:string; eventCode:string; createdAt:string },
+  media: ChunkableMedia[],
+  onProgress: (progress: UploadProgress) => void
+) {
+  const totalBytes = media.reduce((sum, file) => sum + file.blob.size, 0);
+  let completedBytes = 0;
+  const uploadedMediaIds: string[] = [];
+  const report = (loaded: number, speed = 0) => onProgress({
+    loaded: Math.min(totalBytes, loaded),
+    total: totalBytes,
+    percent: totalBytes > 0 ? Math.min(99, Math.round(Math.min(totalBytes, loaded) / totalBytes * 100)) : 99,
+    bytesPerSecond: speed
+  });
+  report(0);
+  for (const file of media) {
+    if (!file.blob.size) continue;
+    const uploadId = crypto.randomUUID();
+    const totalChunks = Math.ceil(file.blob.size / WORK_UPLOAD_CHUNK_BYTES);
+    for (let index = 0; index < totalChunks; index++) {
+      const start = index * WORK_UPLOAD_CHUNK_BYTES;
+      const chunk = file.blob.slice(start, Math.min(file.blob.size, start + WORK_UPLOAD_CHUNK_BYTES));
+      const data = new FormData();
+      data.append('uploadId', uploadId);
+      data.append('filename', file.name);
+      data.append('mimeType', file.mimeType || 'application/octet-stream');
+      data.append('totalSize', String(file.blob.size));
+      data.append('chunkSize', String(WORK_UPLOAD_CHUNK_BYTES));
+      data.append('index', String(index));
+      data.append('totalChunks', String(totalChunks));
+      data.append('chunk', chunk, 'chunk.bin');
+      const result = await uploadFormDataWithProgress('/work/chunk', token, data, progress => {
+        const inChunk = Math.min(chunk.size, progress.loaded);
+        report(completedBytes + inChunk, progress.bytesPerSecond);
+      });
+      if (index === totalChunks - 1) {
+        if (!result.mediaId) throw new Error('伺服器未確認影片／附件已接收，請重試。');
+        uploadedMediaIds.push(result.mediaId);
+      }
+    }
+    completedBytes += file.blob.size;
+    report(completedBytes);
+  }
+  const result = await api('/work', token, {
+    method: 'POST',
+    body: JSON.stringify({ ...fields, uploadedMediaIds })
+  });
+  onProgress({ loaded:totalBytes, total:totalBytes, percent:100, bytesPerSecond:0 });
+  return result;
+}
 const formatBytes = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${(bytes / 1024).toFixed(0)} KB`;
+const formatUsedStorage = (bytes: number) => bytes < 1024 ** 3 ? `${(bytes / 1024 ** 2).toFixed(2)} MB` : `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+const formatStorageGB = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 const formatSpeed = (bytesPerSecond: number) => `${(bytesPerSecond / 1024 / 1024).toFixed(2)} MB/s`;
 const b64url = (s: string) => s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4);
 const b64 = (s: string) => Uint8Array.from(atob(b64url(s)), c => c.charCodeAt(0));
@@ -587,10 +642,8 @@ function App() {
         setMessage(`遠端未連線，事件 ${eventCode} 已加入本機上傳隊列，恢復連線後會自動重試。`);
         return;
       }
-      const data = new FormData(); data.append('title', title); data.append('content', workContent.trim()); data.append('eventDate', workDate); data.append('eventCode', eventCode); data.append('createdAt', createdAt);
-      workMedia.forEach(file => data.append('media', file, file.name));
-      setUploadProgress({ loaded:0, total:0, percent:0, bytesPerSecond:0 });
-      await uploadFormDataWithProgress('/work', token, data, setUploadProgress);
+      setUploadProgress({ loaded:0, total:workMedia.reduce((sum, file) => sum + file.size, 0), percent:0, bytesPerSecond:0 });
+      await uploadWorkInChunks(token, { title, content:workContent.trim(), eventDate:workDate, eventCode, createdAt }, workMedia.map(file => ({ blob:file, name:file.name, mimeType:file.type })), setUploadProgress);
       setUploadedWork(await api('/work', token));
       clearWorkForm();
       setMessage(`事件已上傳。事件編號：${eventCode}`);
@@ -637,10 +690,9 @@ function App() {
     setBusy(true); setLocalDrafts(old => old.map(item => item.id === draft.id ? uploading : item));
     await saveLocalDraft(uploading).catch(() => {});
     try {
-      const data = new FormData(); data.append('title', draft.title); data.append('content', draft.content); data.append('eventDate', draft.eventDate); data.append('eventCode', draft.eventCode); data.append('createdAt', draft.createdAt);
-      draft.media.forEach(file => { if (file.blob) data.append('media', file.blob, file.name || file.originalName || 'attachment'); });
-      setUploadProgress({ loaded:0, total:0, percent:0, bytesPerSecond:0 });
-      await uploadFormDataWithProgress('/work', token, data, setUploadProgress);
+      const queuedMedia: ChunkableMedia[] = draft.media.filter(file => file.blob).map(file => ({ blob:file.blob as Blob, name:file.name || file.originalName || 'attachment', mimeType:file.mimeType || file.blob?.type || 'application/octet-stream' }));
+      setUploadProgress({ loaded:0, total:queuedMedia.reduce((sum, file) => sum + file.blob.size, 0), percent:0, bytesPerSecond:0 });
+      await uploadWorkInChunks(token, { title:draft.title, content:draft.content, eventDate:draft.eventDate, eventCode:draft.eventCode, createdAt:draft.createdAt }, queuedMedia, setUploadProgress);
       await deleteLocalDraft(draft.id); setLocalDrafts(old => old.filter(item => item.id !== draft.id));
       setUploadedWork(await api('/work', token)); setMessage(`事件 ${draft.eventCode} 及 ${draft.media.length} 個附件已上傳。`);
     } catch (err) {
@@ -773,7 +825,7 @@ function App() {
     {adminMode && isDesktop ? <><p className="muted">管理員請使用伺服器 .env 設定的固定帳號及密碼登入。</p><label>管理員帳號<input value={adminUsernameInput} onChange={e => setAdminUsernameInput(e.target.value)} autoComplete="username" /></label><label>管理員密碼<input type="password" value={adminPasswordInput} onChange={e => setAdminPasswordInput(e.target.value)} autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter' && adminUsernameInput && adminPasswordInput && !busy) void adminLogin(); }} /></label><button className="full" disabled={busy || !adminUsernameInput || !adminPasswordInput} onClick={() => void adminLogin()}>{busy ? '登入中…' : '管理員登入'}</button></> : <><p className="muted">一般用戶使用 Passkey 安全登入。</p>{(isDesktop || isRegisterMode) && <label>帳號<input value={username} onChange={e => updateUsername(e.target.value)} autoComplete="username" placeholder="例如：operator01" /></label>}{isRegisterMode && <div className="registration-fields"><label>員工編號（必填，只限 0-9）<input required inputMode="numeric" pattern="[0-9]+" value={employeeNumber} onChange={e => setEmployeeNumber(e.target.value.replace(/[^0-9]/g, ''))} placeholder="例如：0123" /></label><label>名稱（選填）<input value={employeeName} onChange={e => setEmployeeName(e.target.value)} placeholder="員工姓名" /></label><label>聯絡電話（選填）<input type="tel" inputMode="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} placeholder="聯絡電話" /></label><label>電郵（選填）<input type="email" autoComplete="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} placeholder="name@example.com" /></label></div>}<div className="actions">{!isRegisterMode && <button disabled={busy || (isDesktop && !username)} onClick={login}>{busy ? '處理中…' : 'Passkey 登入'}</button>}{isRegisterMode ? <><button disabled={busy || !username || !employeeNumber || !/^[0-9]+$/.test(employeeNumber) } onClick={register}>{busy ? '註冊中…' : '確認註冊 Passkey'}</button><button className="secondary" disabled={busy} onClick={() => { setIsRegisterMode(false); setMessage(''); }}>取消</button></> : <button className="secondary" disabled={busy} onClick={() => { setIsRegisterMode(true); setMessage(''); }}>新用戶註冊</button>}</div><p className="hint">首次使用請先註冊。管理員帳號僅能透過桌面版的固定帳密登入。</p></>}
     {message && <p className="notice">{message}</p>}</section></main></>;
 
-  return <div className="app-shell"><header className="topbar"><div className="mobile-brand-block"><div className="mobile-header-first-row"><div className="brand">事件管理系統</div><button className="secondary compact mobile-logout" onClick={logout}>登出</button><span className={`remote-status inline header-remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status" aria-label={remoteOnline ? '遠端已連線' : '遠端未連線'} title={remoteOnline ? '遠端已連線' : '遠端未連線'}><span className="remote-light" /></span></div><small className="mobile-header-meta"><span className="mobile-header-system"><span>v{displayedVersion}</span><span>{displayedEnvironment}</span>{user.role !== 'admin' && <span className="device-code-meta">設備碼 {deviceCode || '同步中'}</span>}</span><span className="mobile-username">{user.username}</span><span className="mobile-header-storage"><span className="storage-label">空間</span><button type="button" className={`storage-meter ${localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) >= 0.9 ? 'critical' : localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) >= 0.5 ? 'warning' : ''}`} aria-label={`設備使用空間 ${(localStorageInfo.usageBytes / 1024 ** 3).toFixed(2)} / ${(localStorageInfo.quotaBytes / 1024 ** 3).toFixed(2)} GB`} title={`設備使用空間 ${(localStorageInfo.usageBytes / 1024 ** 3).toFixed(2)} / ${(localStorageInfo.quotaBytes / 1024 ** 3).toFixed(2)} GB`} onClick={() => setShowStorageTooltip(value => !value)}><span className="storage-meter-fill" style={{ width: `${Math.max(0, Math.min(100, localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) * 100) * 0.9)}%` }} /></button>{showStorageTooltip && <span className="storage-tooltip" role="tooltip">設備使用空間 {(localStorageInfo.usageBytes / 1024 ** 3).toFixed(2)} / {(localStorageInfo.quotaBytes / 1024 ** 3).toFixed(2)} GB</span>}</span></small></div><div className="account"><span>{user.displayName || user.username}</span>{user.role !== 'admin' && <span className="device-code">設備碼 {deviceCode || '同步中'}</span>}<button className="secondary compact" onClick={logout}>登出</button><span className={`remote-status inline account-remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端連線' : '遠端離線'}</span></div></header>
+  return <div className="app-shell"><header className="topbar"><div className="mobile-brand-block"><div className="mobile-header-first-row"><div className="brand">事件管理系統</div><button className="secondary compact mobile-logout" onClick={logout}>登出</button><span className={`remote-status inline header-remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status" aria-label={remoteOnline ? '遠端已連線' : '遠端未連線'} title={remoteOnline ? '遠端已連線' : '遠端未連線'}><span className="remote-light" /></span></div><small className="mobile-header-meta"><span className="mobile-header-system"><span>v{displayedVersion}</span><span>{displayedEnvironment}</span>{user.role !== 'admin' && <span className="device-code-meta">設備碼 {deviceCode || '同步中'}</span>}</span><span className="mobile-username">{user.username}</span><span className="mobile-header-storage"><span className="storage-label">空間</span><button type="button" className={`storage-meter ${localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) >= 0.9 ? 'critical' : localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) >= 0.5 ? 'warning' : ''}`} aria-label={`本機暫存容量（估算）上限 ${formatStorageGB(localStorageInfo.quotaBytes)}；已使用 ${formatUsedStorage(localStorageInfo.usageBytes)} · 剩餘估算 ${formatStorageGB(Math.max(0, localStorageInfo.quotaBytes - localStorageInfo.usageBytes))}`} title={`本機暫存容量（估算）上限 ${formatStorageGB(localStorageInfo.quotaBytes)}；已使用 ${formatUsedStorage(localStorageInfo.usageBytes)} · 剩餘估算 ${formatStorageGB(Math.max(0, localStorageInfo.quotaBytes - localStorageInfo.usageBytes))}`} onClick={() => setShowStorageTooltip(value => !value)}><span className="storage-meter-fill" style={{ width: `${Math.max(0, Math.min(100, localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) * 100) * 0.9)}%` }} /></button>{showStorageTooltip && <span className="storage-tooltip" role="tooltip">本機暫存容量（估算）上限 {formatStorageGB(localStorageInfo.quotaBytes)}；已使用 {formatUsedStorage(localStorageInfo.usageBytes)} · 剩餘估算 {formatStorageGB(Math.max(0, localStorageInfo.quotaBytes - localStorageInfo.usageBytes))}</span>}</span></small></div><div className="account"><span>{user.displayName || user.username}</span>{user.role !== 'admin' && <span className="device-code">設備碼 {deviceCode || '同步中'}</span>}<button className="secondary compact" onClick={logout}>登出</button><span className={`remote-status inline account-remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端連線' : '遠端離線'}</span></div></header>
     {uploadProgress && <div className="upload-progress global-upload-progress" role="status" aria-live="polite"><div className="upload-progress-heading"><strong>附件上傳中</strong><span>{uploadProgress.percent === null ? `${formatBytes(uploadProgress.loaded)} 已傳送` : `${uploadProgress.percent}%`}</span></div><progress max={100} value={uploadProgress.percent ?? 0} /><div className="upload-progress-details"><span>{formatBytes(uploadProgress.loaded)}{uploadProgress.total ? ` / ${formatBytes(uploadProgress.total)}` : ' 已傳送'}</span><span>目前速度約 {uploadProgress.bytesPerSecond > 0 ? formatSpeed(uploadProgress.bytesPerSecond) : '計算中…'}</span></div></div>}<nav className="tabs">{tabs.map(([key, label]) => <button key={key} className={tab === key ? 'tab active' : 'tab'} onClick={() => { setTab(key); setMessage(''); }}>{label}</button>)}</nav>
     <main className="content">
       {message && <div className="notice" role="status">{message}<button className="notice-close" onClick={() => setMessage('')}>×</button></div>}

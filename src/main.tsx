@@ -628,6 +628,8 @@ function App() {
   }
   function clearWorkForm() {
     setWorkTitle(''); setWorkContent(''); setWorkDate(localDateTimeInputValue()); setWorkMedia([]);
+    setAttachmentUploadStatuses(old => { const next = { ...old }; Object.keys(next).filter(key => key.startsWith('form:')).forEach(key => delete next[key]); return next; });
+    setAttachmentUploadPercents(old => { const next = { ...old }; Object.keys(next).filter(key => key.startsWith('form:')).forEach(key => delete next[key]); return next; });
   }
   function isConnectivityFailure(error: unknown) {
     const text = error instanceof Error ? error.message : String(error || '');

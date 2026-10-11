@@ -264,3 +264,12 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 }
 .storage-popup-overlay{position:fixed;inset:0;z-index:10000;display:flex;align-items:flex-start;justify-content:center;padding:calc(env(safe-area-inset-top, 0px) + 76px) 16px 16px;background:rgba(15,23,42,.24);}
 .storage-popup{max-width:calc(100vw - 32px);padding:12px 16px;border:1px solid #94a3b8;border-radius:10px;background:#fff;color:#1e293b;box-shadow:0 10px 32px rgba(15,23,42,.24);font-size:14px;font-weight:650;line-height:1.4;text-align:center;white-space:normal;overflow-wrap:anywhere;}
+
+
+/* Per-attachment upload progress, displayed under each attachment row. */
+.attachment-progress-item{min-width:0;width:100%;margin:5px 0 9px;}
+.attachment-progress-item .attachment-row{margin:0;}
+.attachment-progress-track{height:5px;width:100%;margin-top:5px;overflow:hidden;border-radius:999px;background:#e2e8f0;}
+.attachment-progress-fill{display:block;height:100%;border-radius:999px;background:#2563eb;transition:width .15s linear;}
+.attachment-progress-fill.status-uploaded{background:#16a34a;}
+.attachment-progress-fill.status-failed{background:#dc2626;}

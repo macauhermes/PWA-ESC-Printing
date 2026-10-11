@@ -803,17 +803,23 @@ function App() {
     void Promise.all(expired.map(draft => deleteLocalDraft(draft.id).catch(() => {})));
   }, [clockNow, localDrafts]);
   const wasRemoteOnline = useRef(false);
+  const reconnectAttemptedIds = useRef(new Set<string>());
   useEffect(() => {
-    if (!remoteOnline) { wasRemoteOnline.current = false; return; }
+    if (!remoteOnline) { wasRemoteOnline.current = false; reconnectAttemptedIds.current.clear(); return; }
     if (!token || !user) return;
     const justReconnected = !wasRemoteOnline.current;
     wasRemoteOnline.current = true;
+    if (justReconnected) reconnectAttemptedIds.current.clear();
+    const queuedForImmediateRetry = localDrafts.find(draft => draft.syncStatus === 'queued' && !reconnectAttemptedIds.current.has(draft.id) && remainingMs(draft.createdAt, Date.now()) > 0);
+    if (!busy && queuedForImmediateRetry) {
+      reconnectAttemptedIds.current.add(queuedForImmediateRetry.id);
+      void uploadLocalWork(queuedForImmediateRetry);
+    }
     const retryQueued = () => {
       if (busy) return;
       const queued = localDrafts.find(draft => draft.syncStatus === 'queued' && remainingMs(draft.createdAt, Date.now()) > 0);
       if (queued) void uploadLocalWork(queued);
     };
-    if (justReconnected) retryQueued();
     const timer = window.setInterval(retryQueued, 15000);
     return () => window.clearInterval(timer);
   }, [remoteOnline, token, user, busy, localDrafts]);

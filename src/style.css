@@ -39,3 +39,7 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 .global-upload-progress{position:sticky;top:0;z-index:9000;width:min(900px,calc(100% - 24px));margin:8px auto;box-shadow:0 8px 24px rgba(15,23,42,.14)}
 
 .account .device-code{display:inline}.account .remote-status{display:inline-flex}
+
+
+.version-label{display:block;margin-top:5px;color:#94a3b8;font-size:12px;font-weight:650;letter-spacing:0}.update-required h1{margin:22px 0 12px}.update-required p{line-height:1.7;color:#475569}.update-required .version-label{color:#64748b}
+@media(max-width:600px){.topbar{align-items:flex-start;gap:12px;flex-wrap:wrap}.topbar>div:first-child{min-width:0}.version-label{font-size:11px}.account{gap:7px}}

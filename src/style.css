@@ -125,3 +125,18 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
   .mobile-header-user .storage-meter{flex:0 0 42px}
   .mobile-header-user .storage-tooltip{right:0}
 }
+
+/* Keep all mobile header metadata on one line; shrink/truncate details before wrapping. */
+@media(max-width:600px){
+  .mobile-header-meta{display:flex;flex-wrap:nowrap;white-space:nowrap;overflow:hidden;gap:6px;justify-content:space-between;align-items:center;min-width:0}
+  .mobile-header-system{display:flex;flex:1 1 0;min-width:0;overflow:hidden;white-space:nowrap;gap:5px}
+  .mobile-header-system>span:not(:last-child)::after{content:none}
+  .mobile-header-system>span{min-width:0;flex:0 0 auto}
+  .mobile-header-system .device-code-meta{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mobile-header-user{display:flex;flex:0 1 auto;min-width:0;max-width:48%;overflow:visible;white-space:nowrap;gap:4px}
+  .mobile-header-user .mobile-username{display:block;min-width:0;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mobile-header-user .mobile-username::after,.mobile-header-user .storage-label::after{content:none}
+  .mobile-header-user .storage-label{flex:0 0 auto}
+  .mobile-header-user .storage-meter{flex:0 0 32px;width:32px;margin:0}
+  .mobile-header-user .storage-tooltip{max-width:calc(100vw - 24px);white-space:normal}
+}

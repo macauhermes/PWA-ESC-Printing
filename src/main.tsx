@@ -656,12 +656,12 @@ function App() {
       localDraftsRef.current = [draft, ...localDraftsRef.current];
       setLocalDrafts(old => [draft, ...old]);
       clearWorkForm();
-      if (remoteOnline) {
-        setMessage(`事件 ${draft.eventCode} 已加入上傳隊列，依事件編號順序排程上傳；你可以繼續建立新事件。`);
-        window.setTimeout(() => startNextQueuedUpload(), 0);
-      } else {
-        setMessage(`遠端未連線，事件 ${draft.eventCode} 已加入上傳隊列，恢復連線後會依事件編號順序上傳。`);
-      }
+      setMessage(remoteOnline
+        ? `事件 ${draft.eventCode} 已加入上傳隊列，依事件編號順序上傳；你可以繼續建立新事件。`
+        : `事件 ${draft.eventCode} 已加入上傳隊列，正在立即嘗試上傳；若網絡中斷會保留並自動重試。`);
+      // Always kick the queue immediately. If another event is uploading,
+      // the scheduler leaves this item queued; completion starts the next one.
+      window.setTimeout(() => startNextQueuedUpload(), 0);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : '無法將事件保存至本機上傳隊列；表單內容仍保留，請檢查儲存空間後重試。');
     } finally { setWorkSubmitting(false); }

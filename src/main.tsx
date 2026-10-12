@@ -304,7 +304,17 @@ function App() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [forceUpdating, setForceUpdating] = useState(false);
-  const [forceUpdateComplete] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('forceUpdate'));
+  const [forceUpdateComplete, setForceUpdateComplete] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('forceUpdate'));
+  useEffect(() => {
+    if (!forceUpdateComplete) return;
+    const timer = window.setTimeout(() => {
+      setForceUpdateComplete(false);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('forceUpdate');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    }, 5 * 60 * 1000);
+    return () => window.clearTimeout(timer);
+  }, [forceUpdateComplete]);
   const [workSubmitting, setWorkSubmitting] = useState(false);
   const uploadingLocalWorkIds = useRef(new Set<string>());
   const [printer, setPrinter] = useState<Printer | null>(null);
@@ -650,6 +660,10 @@ function App() {
   }
   async function logout() {
     try { if (token) await api('/auth/logout', token, { method: 'POST' }); } catch {}
+    setForceUpdating(false); setForceUpdateComplete(false);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('forceUpdate');
+    window.history.replaceState({}, '', url.pathname + url.search + url.hash);
     localStorage.removeItem('esc-token'); setToken(''); setUser(null); setPrinter(null); setTab('print'); setMessage('已登出');
   }
 

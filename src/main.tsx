@@ -303,6 +303,8 @@ function App() {
   const [tab, setTab] = useState('print');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [forceUpdating, setForceUpdating] = useState(false);
+  const [forceUpdateComplete] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('forceUpdate'));
   const [workSubmitting, setWorkSubmitting] = useState(false);
   const uploadingLocalWorkIds = useRef(new Set<string>());
   const [printer, setPrinter] = useState<Printer | null>(null);
@@ -1103,21 +1105,30 @@ function App() {
   const displayedVersion = serverVersion || APP_VERSION;
   const displayedEnvironment = environmentLabel(serverEnvironment || BUILD_ENVIRONMENT);
   const forceRefresh = async () => {
-    if ('serviceWorker' in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(registrations.map(registration => registration.unregister()));
+    if (forceUpdating) return;
+    setForceUpdating(true);
+    setMessage('');
+    try {
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map(registration => registration.unregister()));
+      }
+      if ('caches' in window) {
+        const cacheNames = await window.caches.keys();
+        await Promise.all(cacheNames.map(cacheName => window.caches.delete(cacheName)));
+      }
+      // The marker lets the freshly loaded login screen show completion without a spinner.
+      window.location.replace(`${window.location.pathname}?forceUpdate=${Date.now()}`);
+    } catch (error) {
+      setForceUpdating(false);
+      setMessage(`強制更新失敗：${error instanceof Error ? error.message : '請重試。'}`);
     }
-    if ('caches' in window) {
-      const cacheNames = await window.caches.keys();
-      await Promise.all(cacheNames.map(cacheName => window.caches.delete(cacheName)));
-    }
-    window.location.replace(`${window.location.pathname}?forceUpdate=${Date.now()}`);
   };
   if (updateRequired) return <main className="auth-shell"><section className="panel auth-panel update-required" role="alert"><div className="brand">事件管理系統</div><h1>需要更新系統</h1><p>伺服器已更新至 v{serverVersion}，目前裝置仍在使用 v{APP_VERSION}。為確保功能及資料相容，請先更新再繼續使用。</p><p className="version-label">環境：{displayedEnvironment}</p><button className="full" onClick={() => void forceRefresh()}>立即強制更新並重新載入</button></section></main>;
   if (!user) return <><div className={`remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端已連線' : '遠端未連線'} </div><main className="auth-shell"><section className="panel auth-panel"><div className="brand">事件管理系統</div><small className="version-label">v{displayedVersion} · {displayedEnvironment}</small>
     {isDesktop && <div className="actions"><button className={adminMode ? 'secondary' : ''} onClick={() => { setAdminMode(false); setMessage(''); }}>一般用戶</button><button className={adminMode ? '' : 'secondary'} onClick={() => { setAdminMode(true); setMessage(''); }}>管理員登入</button></div>}
     {adminMode && isDesktop ? <><p className="muted">管理員請使用伺服器 .env 設定的固定帳號及密碼登入。</p><label>管理員帳號<input value={adminUsernameInput} onChange={e => setAdminUsernameInput(e.target.value)} autoComplete="username" /></label><label>管理員密碼<input type="password" value={adminPasswordInput} onChange={e => setAdminPasswordInput(e.target.value)} autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter' && adminUsernameInput && adminPasswordInput && !busy) void adminLogin(); }} /></label><button className="full" disabled={busy || !adminUsernameInput || !adminPasswordInput} onClick={() => void adminLogin()}>{busy ? '登入中…' : '管理員登入'}</button></> : <><p className="muted">一般用戶使用 Passkey 安全登入。</p>{(isDesktop || isRegisterMode) && <label>帳號<input value={username} onChange={e => updateUsername(e.target.value)} autoComplete="username" placeholder="例如：operator01" /></label>}{isRegisterMode && <div className="registration-fields"><label>員工編號（必填，只限 0-9）<input required inputMode="numeric" pattern="[0-9]+" value={employeeNumber} onChange={e => setEmployeeNumber(e.target.value.replace(/[^0-9]/g, ''))} placeholder="例如：0123" /></label><label>名稱（選填）<input value={employeeName} onChange={e => setEmployeeName(e.target.value)} placeholder="員工姓名" /></label><label>聯絡電話（選填）<input type="tel" inputMode="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} placeholder="聯絡電話" /></label><label>電郵（選填）<input type="email" autoComplete="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} placeholder="name@example.com" /></label></div>}<div className="actions">{!isRegisterMode && <button disabled={busy || (isDesktop && !username)} onClick={login}>{busy ? '處理中…' : 'Passkey 登入'}</button>}{isRegisterMode ? <><button disabled={busy || !username || !employeeNumber || !/^[0-9]+$/.test(employeeNumber) } onClick={register}>{busy ? '註冊中…' : '確認註冊 Passkey'}</button><button className="secondary" disabled={busy} onClick={() => { setIsRegisterMode(false); setMessage(''); }}>取消</button></> : <button className="secondary" disabled={busy} onClick={() => { setIsRegisterMode(true); setMessage(''); }}>新用戶註冊</button>}</div><p className="hint">首次使用請先註冊。管理員帳號僅能透過桌面版的固定帳密登入。</p></>}
-    {!isDesktop && <button type="button" className="secondary full mobile-force-update" disabled={busy} onClick={() => void forceRefresh()}>強制更新 PWA 版本</button>}{message && <p className="notice">{message}</p>}</section></main></>;
+    {!isDesktop && <button type="button" className="secondary full mobile-force-update" disabled={busy || forceUpdating || forceUpdateComplete} onClick={() => void forceRefresh()}>{forceUpdating ? <><span className="loading-spinner" aria-hidden="true" />正在清除快取並重新載入…</> : forceUpdateComplete ? '✓ PWA 更新完成' : '強制更新 PWA 版本'}</button>}{message && <p className="notice">{message}</p>}</section></main></>;
 
   return <div className="app-shell"><header className="topbar"><div className="mobile-brand-block"><div className="mobile-header-first-row"><div className="brand">事件管理系統</div><button className="secondary compact mobile-logout" onClick={logout}>登出</button>{user.role !== 'admin' && <span className={`remote-status inline header-remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status" aria-label={remoteOnline ? '遠端已連線' : '遠端未連線'} title={remoteOnline ? '遠端已連線' : '遠端未連線'}><span className="remote-light" /></span>}</div>{user.role === 'admin' && <small className="desktop-system-version">v{displayedVersion}</small>}<div className="mobile-header-meta-row"><div className="mobile-header-system"><span className="meta-version">v{displayedVersion}</span><span className="meta-environment">{displayedEnvironment}</span>{user.role !== 'admin' && <span className="device-code-meta">設備編號 {deviceCode || '同步中'}</span>}</div><div className="mobile-header-user"><span className="mobile-username">{user.username}</span><span className="mobile-header-storage"><button type="button" className="storage-label storage-label-trigger" aria-expanded={showStorageTooltip} onClick={() => setShowStorageTooltip(value => !value)}>空間</button><button type="button" className={`storage-meter ${localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) >= 0.9 ? 'critical' : localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) >= 0.5 ? 'warning' : ''}`} aria-label={`設備使用空間 ${formatUsedStorage(localStorageInfo.usageBytes)} / ${formatStorageGB(localStorageInfo.quotaBytes)}`} aria-expanded={showStorageTooltip} onClick={() => setShowStorageTooltip(value => !value)}><span className="storage-meter-fill" style={{ width: `${Math.max(0, Math.min(100, localStorageInfo.usageBytes / Math.max(1, localStorageInfo.quotaBytes) * 100))}%` }} /></button></span></div></div></div><div className="account"><span>{user.username}</span><button className="secondary compact" onClick={logout}>登出</button>{user.role !== 'admin' && <span className={`remote-status inline account-remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端連線' : '遠端離線'}</span>}</div></header>
     {showStorageTooltip && <div className="storage-popup-overlay" role="presentation" onClick={() => setShowStorageTooltip(false)}><section className="storage-popup storage-capacity" role="dialog" aria-modal="true" aria-label="本機暫存容量估算" onClick={event => event.stopPropagation()}>

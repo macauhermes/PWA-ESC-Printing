@@ -714,11 +714,18 @@ function App() {
     if (!code) throw new Error('此設備尚未取得後台派發的設備碼。請先在可連線時完成註冊或登入，再建立離線事件。');
     return makeEventCode(await nextLocalEventSequence(), code, new Date());
   }
-  function draftFromForm(eventCode: string, syncStatus: LocalDraft['syncStatus'] = 'draft', createdAt = new Date().toISOString()): LocalDraft {
+  async function draftFromForm(eventCode: string, syncStatus: LocalDraft['syncStatus'] = 'draft', createdAt = new Date().toISOString()): Promise<LocalDraft> {
+    // Snapshot picked files into fresh, byte-backed Blobs before IndexedDB persistence.
+    // Some Chromium-based mobile browsers can fail with "Failed to write blobs (InvalidBlob)"
+    // when IndexedDB receives the original lazy File handle from the device file picker.
+    const media = await Promise.all(workMedia.map(async file => {
+      const mimeType = file.type || mediaMimeType(file.name, '') || 'application/octet-stream';
+      const blob = await new Response(file.stream(), { headers: { 'Content-Type': mimeType } }).blob();
+      return { name:file.name, originalName:file.name, kind:(file.type || mediaMimeType(file.name, '')).startsWith('video/') ? 'video' : 'image', mimeType, size:file.size, blob };
+    }));
     return {
       id: crypto.randomUUID(), title: workTitle.trim(), content: workContent.trim(), eventDate: workDate,
-      createdAt, eventCode, syncStatus,
-      media: workMedia.map(file => ({ name:file.name, originalName:file.name, kind:(file.type || mediaMimeType(file.name, '')).startsWith('video/') ? 'video' : 'image', mimeType:file.type || mediaMimeType(file.name, '') || 'application/octet-stream', size:file.size, blob:new Blob([file], { type:file.type || mediaMimeType(file.name, '') || 'application/octet-stream' }) }))
+      createdAt, eventCode, syncStatus, media
     };
   }
   function clearWorkForm() {
@@ -736,7 +743,7 @@ function App() {
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
     setWorkSubmitting(true);
     try {
-      const draft = { ...draftFromForm(await createEventCode(), 'queued'), uploadDispatchSeq: await nextUploadDispatchSequence() };
+      const draft = { ...await draftFromForm(await createEventCode(), 'queued'), uploadDispatchSeq: await nextUploadDispatchSequence() };
       await saveLocalDraft(draft);
       localDraftsRef.current = [draft, ...localDraftsRef.current];
       setLocalDrafts(old => [draft, ...old]);
@@ -759,7 +766,7 @@ function App() {
     const title = workTitle.trim(); if (!title) { setMessage('請輸入事件標題'); return; }
     setWorkSubmitting(true);
     try {
-      const draft = draftFromForm(await createEventCode());
+      const draft = await draftFromForm(await createEventCode());
       await saveLocalDraft(draft); setLocalDrafts(old => [draft, ...old]); clearWorkForm();
       setMessage(`事件已暫存在手機。事件編號：${draft.eventCode}`);
     } catch (err) { setMessage(err instanceof Error ? err.message : '手機暫存失敗；可能是裝置儲存空間不足。請減少影片大小後再試。'); }

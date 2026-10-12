@@ -718,7 +718,7 @@ function App() {
     return {
       id: crypto.randomUUID(), title: workTitle.trim(), content: workContent.trim(), eventDate: workDate,
       createdAt, eventCode, syncStatus,
-      media: workMedia.map(file => ({ name:file.name, originalName:file.name, kind:file.type.startsWith('video/') ? 'video' : 'image', mimeType:file.type, size:file.size, blob:file }))
+      media: workMedia.map(file => ({ name:file.name, originalName:file.name, kind:(file.type || mediaMimeType(file.name, '')).startsWith('video/') ? 'video' : 'image', mimeType:file.type || mediaMimeType(file.name, '') || 'application/octet-stream', size:file.size, blob:new Blob([file], { type:file.type || mediaMimeType(file.name, '') || 'application/octet-stream' }) }))
     };
   }
   function clearWorkForm() {

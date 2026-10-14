@@ -146,29 +146,15 @@ const id = () => crypto.randomUUID();
 type SavedPrinter = { id: string; name: string; savedAt: string };
 type LocalDatabaseInfo = { exists: boolean; version: number };
 function inspectLocalDatabaseVersion(): Promise<LocalDatabaseInfo> {
-  return new Promise((resolve, reject) => {
-    let createdEmptyDatabase = false;
-    const request = indexedDB.open(LOCAL_DB_NAME);
-    request.onupgradeneeded = event => {
-      if ((event as IDBVersionChangeEvent).oldVersion === 0) createdEmptyDatabase = true;
-    };
-    request.onsuccess = () => {
-      const db = request.result;
-      const version = db.version;
-      db.close();
-      if (!createdEmptyDatabase) {
-        resolve({ exists: true, version });
-        return;
-      }
-      // Opening a missing database creates version 1; remove this empty probe DB
-      // so first-time users are not mistaken for users with an old schema.
-      const deletion = indexedDB.deleteDatabase(LOCAL_DB_NAME);
-      deletion.onsuccess = () => resolve({ exists: false, version: 0 });
-      deletion.onerror = () => reject(deletion.error || new Error('無法完成本機資料庫版本檢查。'));
-      deletion.onblocked = () => reject(new Error('本機資料庫仍被其他分頁使用。請關閉其他已開啟的系統分頁後重試。'));
-    };
-    request.onerror = () => reject(request.error || new Error('無法讀取本機資料庫版本。'));
-    request.onblocked = () => reject(new Error('本機資料庫仍被其他分頁使用。請關閉其他已開啟的系統分頁後重試。'));
+  const factory = indexedDB as IDBFactory & { databases?: () => Promise<Array<{ name?: string; version?: number }>> };
+  if (typeof factory.databases !== 'function') {
+    return Promise.reject(new Error('此瀏覽器不支援安全檢查本機資料庫版本。請更新至較新的 Safari／Chrome 後重試；為避免資料遺失，系統不會自動清除資料庫。'));
+  }
+  return factory.databases().then(databases => {
+    const existing = databases.find(database => database.name === LOCAL_DB_NAME);
+    return existing
+      ? { exists: true, version: Number(existing.version || 0) }
+      : { exists: false, version: 0 };
   });
 }
 function deleteLocalDatabase(onBlocked?: () => void): Promise<void> {

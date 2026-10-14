@@ -1223,14 +1223,15 @@ function App() {
     setForceUpdating(true);
     setMessage('');
     try {
+      // Destructive work starts only after the user explicitly presses the update button.
+      if (schemaUpdateRequired) localDatabaseResetInProgress = true;
+      uploadControllers.current.forEach(controller => controller.abort());
+      const deadline = Date.now() + 10000;
+      while (uploadControllers.current.size > 0 && Date.now() < deadline) {
+        await new Promise(resolve => window.setTimeout(resolve, 100));
+      }
+      if (uploadControllers.current.size > 0) throw new Error('仍有上傳程序未停止。為避免資料損壞，尚未清除本機資料；請稍後再確認更新。');
       if (schemaUpdateRequired) {
-        localDatabaseResetInProgress = true;
-        uploadControllers.current.forEach(controller => controller.abort());
-        const deadline = Date.now() + 10000;
-        while (uploadControllers.current.size > 0 && Date.now() < deadline) {
-          await new Promise(resolve => window.setTimeout(resolve, 100));
-        }
-        if (uploadControllers.current.size > 0) throw new Error('仍有上傳程序未停止。為避免資料損壞，尚未清除本機資料；請稍後再確認更新。');
         await deleteLocalDatabase(() => setMessage('正在等待其他分頁關閉本機資料庫連線；請關閉其他已開啟的系統分頁。'));
       }
       if ('serviceWorker' in navigator) {

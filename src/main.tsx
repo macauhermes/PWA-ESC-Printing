@@ -5,6 +5,8 @@ import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import './style.css';
 
 const APP_VERSION = packageJson.version;
+const LOCAL_DB_NAME = 'esc-printing-local';
+const LOCAL_DB_SCHEMA_VERSION = 2;
 const BUILD_ENVIRONMENT = import.meta.env.VITE_APP_ENV || (import.meta.env.PROD ? 'production' : 'test');
 const environmentLabel = (value: string) => value === 'production' ? '正式環境' : '測試環境';
 type User = { id: string; username: string; role: string };
@@ -142,9 +144,41 @@ const b64 = (s: string) => Uint8Array.from(atob(b64url(s)), c => c.charCodeAt(0)
 const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, b => String.fromCharCode(b)).join(''));
 const id = () => crypto.randomUUID();
 type SavedPrinter = { id: string; name: string; savedAt: string };
+type LocalDatabaseInfo = { exists: boolean; version: number };
+function inspectLocalDatabaseVersion(): Promise<LocalDatabaseInfo> {
+  return new Promise((resolve, reject) => {
+    let createdEmptyDatabase = false;
+    const request = indexedDB.open(LOCAL_DB_NAME);
+    request.onupgradeneeded = event => {
+      if ((event as IDBVersionChangeEvent).oldVersion === 0) {
+        createdEmptyDatabase = true;
+        request.transaction?.abort();
+      }
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      const version = db.version;
+      db.close();
+      resolve({ exists: true, version });
+    };
+    request.onerror = () => {
+      if (createdEmptyDatabase) resolve({ exists: false, version: 0 });
+      else reject(request.error || new Error('無法讀取本機資料庫版本。'));
+    };
+    request.onblocked = () => reject(new Error('本機資料庫仍被其他分頁使用。請關閉其他已開啟的系統分頁後重試。'));
+  });
+}
+function deleteLocalDatabase(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(LOCAL_DB_NAME);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error || new Error('清除本機資料庫失敗。'));
+    request.onblocked = () => reject(new Error('清除本機資料庫被其他分頁阻擋。請關閉其他已開啟的系統分頁，再重新確認更新。'));
+  });
+}
 function printerStore(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open('esc-printing-local', 2);
+    const request = indexedDB.open(LOCAL_DB_NAME, LOCAL_DB_SCHEMA_VERSION);
     request.onupgradeneeded = () => { const db = request.result; if (!db.objectStoreNames.contains('preferences')) db.createObjectStore('preferences', { keyPath: 'id' }); if (!db.objectStoreNames.contains('workDrafts')) db.createObjectStore('workDrafts', { keyPath: 'id' }); };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -338,6 +372,13 @@ function App() {
   const [serverVersion, setServerVersion] = useState('');
   const [serverEnvironment, setServerEnvironment] = useState('');
   const [updateRequired, setUpdateRequired] = useState(false);
+  const [versionCheckComplete, setVersionCheckComplete] = useState(false);
+  const [versionCheckError, setVersionCheckError] = useState('');
+  const [schemaUpdateRequired, setSchemaUpdateRequired] = useState(false);
+  const [localDbVersion, setLocalDbVersion] = useState(0);
+  const [serverDbSchemaVersion, setServerDbSchemaVersion] = useState(LOCAL_DB_SCHEMA_VERSION);
+  const [updateSummary, setUpdateSummary] = useState('本次更新包含系統版本及本機資料庫相容性檢查。');
+  const [updateRisks, setUpdateRisks] = useState('確認後會永久清除本機 IndexedDB 中的暫存事件、上傳隊列、附件、打印機偏好及本機流水號。尚未上傳的事件與附件無法復原；已上傳至後台的記錄不受影響。');
   const [clockNow, setClockNow] = useState(() => Date.now());
   const [uploadedWork, setUploadedWork] = useState<DeviceWork[]>([]);
   const [mediaViewer, setMediaViewer] = useState<MediaViewer | null>(null);
@@ -404,20 +445,56 @@ function App() {
   }, []);
   useEffect(() => {
     let active = true;
+    let checking = false;
     const check = async () => {
+      if (checking) return;
+      checking = true;
       try {
         const response = await fetch('/api/health', { cache: 'no-store' });
         if (!response.ok) throw new Error('API unavailable');
         const versionResponse = await fetch('/api/version', { cache: 'no-store' });
         if (!versionResponse.ok) throw new Error('Version endpoint unavailable');
-        const versionInfo: { version: string; environment: string } = await versionResponse.json();
+        const versionInfo: { version: string; environment: string; localDbSchemaVersion?: number; updateSummary?: string; updateRisks?: string } = await versionResponse.json();
+        let databaseInfo: LocalDatabaseInfo;
+        try {
+          databaseInfo = await inspectLocalDatabaseVersion();
+        } catch (error) {
+          if (active) {
+            setRemoteOnline(true);
+            setServerVersion(versionInfo.version);
+            setServerEnvironment(versionInfo.environment);
+            setVersionCheckComplete(true);
+            setVersionCheckError(error instanceof Error ? error.message : '無法安全檢查本機資料庫版本。');
+            setUpdateRequired(true);
+          }
+          return;
+        }
+        const targetSchemaVersion = Math.max(1, Number(versionInfo.localDbSchemaVersion || LOCAL_DB_SCHEMA_VERSION));
+        const schemaMismatch = databaseInfo.exists && databaseInfo.version !== targetSchemaVersion;
+        const versionMismatch = versionInfo.version !== APP_VERSION || versionInfo.environment !== BUILD_ENVIRONMENT;
         if (active) {
           setRemoteOnline(true);
           setServerVersion(versionInfo.version);
           setServerEnvironment(versionInfo.environment);
-          if (versionInfo.version !== APP_VERSION || versionInfo.environment !== BUILD_ENVIRONMENT) setUpdateRequired(true);
+          setLocalDbVersion(databaseInfo.version);
+          setServerDbSchemaVersion(targetSchemaVersion);
+          setUpdateSummary(String(versionInfo.updateSummary || '本次更新包含系統版本及本機資料庫相容性檢查。'));
+          setUpdateRisks(String(versionInfo.updateRisks || '確認後會永久清除本機 IndexedDB 中的暫存事件、上傳隊列、附件、打印機偏好及本機流水號。尚未上傳的事件與附件無法復原；已上傳至後台的記錄不受影響。'));
+          setSchemaUpdateRequired(schemaMismatch);
+          setUpdateRequired(versionMismatch || schemaMismatch);
+          setVersionCheckError('');
+          setVersionCheckComplete(true);
         }
-      } catch { if (active) setRemoteOnline(false); }
+      } catch {
+        if (active) {
+          setRemoteOnline(false);
+          // Allow offline local work when the server cannot be reached. Once online,
+          // the next check will compare the server's schema version before enabling uploads.
+          setVersionCheckComplete(true);
+        }
+      } finally {
+        checking = false;
+      }
     };
     void check();
     const timer = window.setInterval(check, 5000);
@@ -432,6 +509,7 @@ function App() {
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => {
+    if (!versionCheckComplete || updateRequired || versionCheckError) return;
     if (!token || !user) return;
     if (user.role === 'admin') { setPrinter(null); setSavedPrinter(null); return; }
     api('/printer-preference', token).then(setSavedPrinter).catch(() => {});
@@ -446,8 +524,8 @@ function App() {
       }
     }).catch(() => {});
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-  }, [token, user]);
-  useEffect(() => { loadLocalDrafts().then(async drafts => { let normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); const missing = normalized.filter(draft => draft.syncStatus === 'queued' && !(Number(draft.uploadDispatchSeq) > 0)).sort((a,b) => a.createdAt.localeCompare(b.createdAt)); for (const draft of missing) { draft.uploadDispatchSeq = await nextUploadDispatchSequence(); } localDraftsRef.current = normalized; setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index] || missing.includes(draft)).map(draft => saveLocalDraft(draft).catch(() => {}))); window.setTimeout(() => startNextQueuedUpload(), 0); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, []);
+  }, [token, user, versionCheckComplete, updateRequired, versionCheckError]);
+  useEffect(() => { if (!versionCheckComplete || updateRequired || versionCheckError) return; loadLocalDrafts().then(async drafts => { let normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); const missing = normalized.filter(draft => draft.syncStatus === 'queued' && !(Number(draft.uploadDispatchSeq) > 0)).sort((a,b) => a.createdAt.localeCompare(b.createdAt)); for (const draft of missing) { draft.uploadDispatchSeq = await nextUploadDispatchSequence(); } localDraftsRef.current = normalized; setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index] || missing.includes(draft)).map(draft => saveLocalDraft(draft).catch(() => {}))); window.setTimeout(() => startNextQueuedUpload(), 0); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, [versionCheckComplete, updateRequired, versionCheckError]);
   useEffect(() => {
     let active = true;
     const refreshStorageInfo = async () => {
@@ -1117,20 +1195,20 @@ function App() {
   }
 
   useEffect(() => {
-    if (!localDrafts.length) return;
+    if (!versionCheckComplete || updateRequired || versionCheckError || !localDrafts.length) return;
     const expired = localDrafts.filter(draft => remainingMs(draft.createdAt, clockNow) <= 0);
     if (!expired.length) return;
     setLocalDrafts(current => current.filter(draft => remainingMs(draft.createdAt, clockNow) > 0));
     void Promise.all(expired.map(draft => deleteLocalDraft(draft.id).catch(() => {})));
-  }, [clockNow, localDrafts]);
+  }, [clockNow, localDrafts, versionCheckComplete, updateRequired, versionCheckError]);
   useEffect(() => {
-    if (!token || !user) return;
+    if (!versionCheckComplete || updateRequired || versionCheckError || !remoteOnline || !token || !user) return;
     // Periodic queue pump is deliberately independent of the health badge. The
     // actual upload request handles offline/HTTP failures and keeps the draft.
     const timer = window.setInterval(() => startNextQueuedUpload(), 15000);
     window.setTimeout(() => startNextQueuedUpload(), 0);
     return () => window.clearInterval(timer);
-  }, [token, user]);
+  }, [token, user, versionCheckComplete, updateRequired, versionCheckError, remoteOnline]);
   const tabs = useMemo(() => {
     const base: [string,string][] = user?.role === 'admin'
       ? [['notifications', '通知'], ['registered-devices', '註冊設備'], ['device-users', '用戶列表'], ['device-work', '事件記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]
@@ -1144,6 +1222,7 @@ function App() {
     setForceUpdating(true);
     setMessage('');
     try {
+      if (schemaUpdateRequired) await deleteLocalDatabase();
       if ('serviceWorker' in navigator) {
         const registrations = await navigator.serviceWorker.getRegistrations();
         await Promise.all(registrations.map(registration => registration.unregister()));
@@ -1159,7 +1238,10 @@ function App() {
       setMessage(`強制更新失敗：${error instanceof Error ? error.message : '請重試。'}`);
     }
   };
-  if (updateRequired) return <main className="auth-shell"><section className="panel auth-panel update-required" role="alert"><div className="brand">事件管理系統</div><h1>需要更新系統</h1><p>伺服器已更新至 v{serverVersion}，目前裝置仍在使用 v{APP_VERSION}。為確保功能及資料相容，請先更新再繼續使用。</p><p className="version-label">環境：{displayedEnvironment}</p><button className="full" onClick={() => void forceRefresh()}>立即強制更新並重新載入</button></section></main>;
+  if (!versionCheckComplete) return <main className="auth-shell"><section className="panel auth-panel update-required" role="status"><div className="brand">事件管理系統</div><h1>正在檢查系統更新</h1><p>正在確認系統版本及本機資料庫相容性，請稍候。</p></section></main>;
+  if (versionCheckError) return <main className="auth-shell"><section className="panel auth-panel update-required" role="alert"><div className="brand">事件管理系統</div><h1>無法安全檢查本機資料庫</h1><p>{versionCheckError}</p><p>為避免資料結構不相容或意外遺失，本系統暫停使用。請關閉其他已開啟的系統分頁後重新載入。</p><button className="full" onClick={() => window.location.reload()}>重新檢查</button></section></main>;
+  if (schemaUpdateRequired) return <main className="schema-update-shell" role="dialog" aria-modal="true" aria-labelledby="schema-update-title"><section className="schema-update-modal"><div className="schema-update-eyebrow">必要的資料庫結構更新</div><div className="brand">事件管理系統</div><h1 id="schema-update-title">確認更新並重建本機資料庫</h1><p>偵測到新版本需要不同的 IndexedDB 結構。為避免舊資料與新結構衝突，必須先清除本機資料庫，再更新系統並重新建立所需資料表。</p><div className="schema-version-row"><span>目前本機資料庫版本</span><strong>{localDbVersion}</strong><span>新版本要求</span><strong>{serverDbSchemaVersion}</strong></div><section className="schema-update-detail"><h2>本次更新內容</h2><p>{updateSummary}</p></section><section className="schema-update-warning"><h2>風險及會清除的資料</h2><p>{updateRisks}</p><ul><li>尚未上傳的本機暫存事件、上傳隊列及其附件會永久刪除。</li><li>本機保存的打印機偏好與事件流水號亦會清除；更新後會重新建立空白資料庫。</li><li>已上傳到後台的工作記錄與附件不受影響；本操作不會刪除伺服器資料。</li></ul></section><p className="schema-update-final-warning">此操作無法復原。只有按下「確認更新並清除本機資料」後，系統才會清除 IndexedDB、更新程式快取並重新載入。</p><button className="full schema-update-confirm" disabled={forceUpdating} onClick={() => void forceRefresh()}>{forceUpdating ? <><span className="loading-spinner" aria-hidden="true" />正在清除本機資料並更新…</> : '確認更新並清除本機資料'}</button>{message && <p className="notice">{message}</p>}</section></main>;
+  if (updateRequired) return <main className="auth-shell"><section className="panel auth-panel update-required" role="alert"><div className="brand">事件管理系統</div><h1>需要更新系統</h1><p>伺服器已更新至 v{serverVersion}，目前裝置仍在使用 v{APP_VERSION}。為確保功能及資料相容，請先更新再繼續使用。</p><p className="version-label">環境：{displayedEnvironment}</p><button className="full" disabled={forceUpdating} onClick={() => void forceRefresh()}>{forceUpdating ? '正在清理程式快取並重新載入…' : '立即強制更新並重新載入'}</button>{message && <p className="notice">{message}</p>}</section></main>;
   if (!user) return <><div className={`remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端已連線' : '遠端未連線'} </div><main className="auth-shell"><section className="panel auth-panel"><div className="brand">事件管理系統</div><small className="version-label">v{displayedVersion} · {displayedEnvironment}</small>
     {isDesktop && <div className="actions"><button className={adminMode ? 'secondary' : ''} onClick={() => { setAdminMode(false); setMessage(''); }}>一般用戶</button><button className={adminMode ? '' : 'secondary'} onClick={() => { setAdminMode(true); setMessage(''); }}>管理員登入</button></div>}
     {adminMode && isDesktop ? <><p className="muted">管理員請使用伺服器 .env 設定的固定帳號及密碼登入。</p><label>管理員帳號<input value={adminUsernameInput} onChange={e => setAdminUsernameInput(e.target.value)} autoComplete="username" /></label><label>管理員密碼<input type="password" value={adminPasswordInput} onChange={e => setAdminPasswordInput(e.target.value)} autoComplete="current-password" onKeyDown={e => { if (e.key === 'Enter' && adminUsernameInput && adminPasswordInput && !busy) void adminLogin(); }} /></label><button className="full" disabled={busy || !adminUsernameInput || !adminPasswordInput} onClick={() => void adminLogin()}>{busy ? '登入中…' : '管理員登入'}</button></> : <><p className="muted">一般用戶使用 Passkey 安全登入。</p>{(isDesktop || isRegisterMode) && <label>帳號<input value={username} onChange={e => updateUsername(e.target.value)} autoComplete="username" placeholder="例如：operator01" /></label>}{isRegisterMode && <div className="registration-fields"><label>員工編號（必填，只限 0-9）<input required inputMode="numeric" pattern="[0-9]+" value={employeeNumber} onChange={e => setEmployeeNumber(e.target.value.replace(/[^0-9]/g, ''))} placeholder="例如：0123" /></label><label>名稱（選填）<input value={employeeName} onChange={e => setEmployeeName(e.target.value)} placeholder="員工姓名" /></label><label>聯絡電話（選填）<input type="tel" inputMode="tel" value={contactPhone} onChange={e => setContactPhone(e.target.value)} placeholder="聯絡電話" /></label><label>電郵（選填）<input type="email" autoComplete="email" value={contactEmail} onChange={e => setContactEmail(e.target.value)} placeholder="name@example.com" /></label></div>}<div className="actions">{!isRegisterMode && <button disabled={busy || (isDesktop && !username)} onClick={login}>{busy ? '處理中…' : 'Passkey 登入'}</button>}{isRegisterMode ? <><button disabled={busy || !username || !employeeNumber || !/^[0-9]+$/.test(employeeNumber) } onClick={register}>{busy ? '註冊中…' : '確認註冊 Passkey'}</button><button className="secondary" disabled={busy} onClick={() => { setIsRegisterMode(false); setMessage(''); }}>取消</button></> : <button className="secondary" disabled={busy} onClick={() => { setIsRegisterMode(true); setMessage(''); }}>新用戶註冊</button>}</div><p className="hint">首次使用請先註冊。管理員帳號僅能透過桌面版的固定帳密登入。</p></>}

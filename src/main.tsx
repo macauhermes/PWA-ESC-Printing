@@ -171,12 +171,12 @@ function inspectLocalDatabaseVersion(): Promise<LocalDatabaseInfo> {
     request.onblocked = () => reject(new Error('本機資料庫仍被其他分頁使用。請關閉其他已開啟的系統分頁後重試。'));
   });
 }
-function deleteLocalDatabase(): Promise<void> {
+function deleteLocalDatabase(onBlocked?: () => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase(LOCAL_DB_NAME);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error || new Error('清除本機資料庫失敗。'));
-    request.onblocked = () => reject(new Error('清除本機資料庫被其他分頁阻擋。請關閉其他已開啟的系統分頁，再重新確認更新。'));
+    request.onblocked = () => onBlocked?.();
   });
 }
 function printerStore(): Promise<IDBDatabase> {
@@ -372,11 +372,19 @@ function App() {
   const [attachmentUploadPercents, setAttachmentUploadPercents] = useState<Record<string,number>>({});
   const [deviceCode, setDeviceCode] = useState(() => localStorage.getItem('esc-device-code') || '');
   const [remoteOnline, setRemoteOnline] = useState(false);
+  const remoteOnlineRef = useRef(false);
+  remoteOnlineRef.current = remoteOnline;
   const [serverVersion, setServerVersion] = useState('');
   const [serverEnvironment, setServerEnvironment] = useState('');
   const [updateRequired, setUpdateRequired] = useState(false);
+  const updateRequiredRef = useRef(false);
+  updateRequiredRef.current = updateRequired;
   const [versionCheckComplete, setVersionCheckComplete] = useState(false);
+  const versionCheckCompleteRef = useRef(false);
+  versionCheckCompleteRef.current = versionCheckComplete;
   const [versionCheckError, setVersionCheckError] = useState('');
+  const versionCheckErrorRef = useRef('');
+  versionCheckErrorRef.current = versionCheckError;
   const [schemaUpdateRequired, setSchemaUpdateRequired] = useState(false);
   const [localDbVersion, setLocalDbVersion] = useState(0);
   const [serverDbSchemaVersion, setServerDbSchemaVersion] = useState(LOCAL_DB_SCHEMA_VERSION);
@@ -896,7 +904,7 @@ function App() {
     // Claim the queue item and install its AbortController synchronously, before any
     // async work starts. This closes the race where cancel was clicked while the
     // scheduler was still awaiting event-code creation and the upload kept running.
-    if (!token || !user || uploadingLocalWorkIds.current.size > 0) return;
+    if (!versionCheckCompleteRef.current || updateRequiredRef.current || versionCheckErrorRef.current || !remoteOnlineRef.current || !token || !user || uploadingLocalWorkIds.current.size > 0) return;
     const next = localDraftsRef.current
       .filter(draft => draft.syncStatus === 'queued' && remainingMs(draft.createdAt, Date.now()) > 0)
       .sort((a,b) => uploadDispatchSequence(a) - uploadDispatchSequence(b) || a.createdAt.localeCompare(b.createdAt))[0];
@@ -1212,6 +1220,11 @@ function App() {
     window.setTimeout(() => startNextQueuedUpload(), 0);
     return () => window.clearInterval(timer);
   }, [token, user, versionCheckComplete, updateRequired, versionCheckError, remoteOnline]);
+  useEffect(() => {
+    if (!updateRequired) return;
+    // Stop active uploads before a user confirms a destructive schema reset.
+    uploadControllers.current.forEach(controller => controller.abort());
+  }, [updateRequired]);
   const tabs = useMemo(() => {
     const base: [string,string][] = user?.role === 'admin'
       ? [['notifications', '通知'], ['registered-devices', '註冊設備'], ['device-users', '用戶列表'], ['device-work', '事件記錄'], ['logins', '登入記錄'], ['audit', '操作稽核'], ['clear-records', '清除持久化記錄']]
@@ -1225,7 +1238,15 @@ function App() {
     setForceUpdating(true);
     setMessage('');
     try {
-      if (schemaUpdateRequired) await deleteLocalDatabase();
+      if (schemaUpdateRequired) {
+        uploadControllers.current.forEach(controller => controller.abort());
+        const deadline = Date.now() + 10000;
+        while (uploadControllers.current.size > 0 && Date.now() < deadline) {
+          await new Promise(resolve => window.setTimeout(resolve, 100));
+        }
+        if (uploadControllers.current.size > 0) throw new Error('仍有上傳程序未停止。為避免資料損壞，尚未清除本機資料；請稍後再確認更新。');
+        await deleteLocalDatabase(() => setMessage('正在等待其他分頁關閉本機資料庫連線；請關閉其他已開啟的系統分頁。'));
+      }
       if ('serviceWorker' in navigator) {
         const registrations = await navigator.serviceWorker.getRegistrations();
         await Promise.all(registrations.map(registration => registration.unregister()));

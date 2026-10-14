@@ -150,21 +150,24 @@ function inspectLocalDatabaseVersion(): Promise<LocalDatabaseInfo> {
     let createdEmptyDatabase = false;
     const request = indexedDB.open(LOCAL_DB_NAME);
     request.onupgradeneeded = event => {
-      if ((event as IDBVersionChangeEvent).oldVersion === 0) {
-        createdEmptyDatabase = true;
-        request.transaction?.abort();
-      }
+      if ((event as IDBVersionChangeEvent).oldVersion === 0) createdEmptyDatabase = true;
     };
     request.onsuccess = () => {
       const db = request.result;
       const version = db.version;
       db.close();
-      resolve({ exists: true, version });
+      if (!createdEmptyDatabase) {
+        resolve({ exists: true, version });
+        return;
+      }
+      // Opening a missing database creates version 1; remove this empty probe DB
+      // so first-time users are not mistaken for users with an old schema.
+      const deletion = indexedDB.deleteDatabase(LOCAL_DB_NAME);
+      deletion.onsuccess = () => resolve({ exists: false, version: 0 });
+      deletion.onerror = () => reject(deletion.error || new Error('無法完成本機資料庫版本檢查。'));
+      deletion.onblocked = () => reject(new Error('本機資料庫仍被其他分頁使用。請關閉其他已開啟的系統分頁後重試。'));
     };
-    request.onerror = () => {
-      if (createdEmptyDatabase) resolve({ exists: false, version: 0 });
-      else reject(request.error || new Error('無法讀取本機資料庫版本。'));
-    };
+    request.onerror = () => reject(request.error || new Error('無法讀取本機資料庫版本。'));
     request.onblocked = () => reject(new Error('本機資料庫仍被其他分頁使用。請關閉其他已開啟的系統分頁後重試。'));
   });
 }

@@ -329,6 +329,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [forceUpdating, setForceUpdating] = useState(false);
+  const forceUpdatingRef = useRef(false);
   const [forceUpdateComplete, setForceUpdateComplete] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('forceUpdate'));
   useEffect(() => {
     if (!forceUpdateComplete) return;
@@ -446,7 +447,7 @@ function App() {
     let active = true;
     let checking = false;
     const check = async () => {
-      if (checking) return;
+      if (checking || forceUpdatingRef.current) return;
       checking = true;
       try {
         const response = await fetch('/api/health', { cache: 'no-store' });
@@ -1222,7 +1223,8 @@ function App() {
   const displayedVersion = serverVersion || APP_VERSION;
   const displayedEnvironment = environmentLabel(serverEnvironment || BUILD_ENVIRONMENT);
   const forceRefresh = async () => {
-    if (forceUpdating) return;
+    if (forceUpdatingRef.current) return;
+    forceUpdatingRef.current = true;
     setForceUpdating(true);
     setMessage('');
     try {
@@ -1247,6 +1249,7 @@ function App() {
       // The marker lets the freshly loaded login screen show completion without a spinner.
       window.location.replace(`${window.location.pathname}?forceUpdate=${Date.now()}`);
     } catch (error) {
+      forceUpdatingRef.current = false;
       setForceUpdating(false);
       setMessage(`強制更新失敗：${error instanceof Error ? error.message : '請重試。'}`);
     }

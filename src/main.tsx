@@ -145,6 +145,7 @@ const toBase64 = (bytes: Uint8Array) => btoa(Array.from(bytes, b => String.fromC
 const id = () => crypto.randomUUID();
 type SavedPrinter = { id: string; name: string; savedAt: string };
 type LocalDatabaseInfo = { exists: boolean; version: number };
+let localDatabaseResetInProgress = false;
 function inspectLocalDatabaseVersion(): Promise<LocalDatabaseInfo> {
   const factory = indexedDB as IDBFactory & { databases?: () => Promise<Array<{ name?: string; version?: number }>> };
   if (typeof factory.databases !== 'function') {
@@ -166,6 +167,7 @@ function deleteLocalDatabase(onBlocked?: () => void): Promise<void> {
   });
 }
 function printerStore(): Promise<IDBDatabase> {
+  if (localDatabaseResetInProgress) return Promise.reject(new Error('本機資料庫正在重建；請等待系統更新完成。'));
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(LOCAL_DB_NAME, LOCAL_DB_SCHEMA_VERSION);
     request.onupgradeneeded = () => { const db = request.result; if (!db.objectStoreNames.contains('preferences')) db.createObjectStore('preferences', { keyPath: 'id' }); if (!db.objectStoreNames.contains('workDrafts')) db.createObjectStore('workDrafts', { keyPath: 'id' }); };
@@ -1225,6 +1227,7 @@ function App() {
     setMessage('');
     try {
       if (schemaUpdateRequired) {
+        localDatabaseResetInProgress = true;
         uploadControllers.current.forEach(controller => controller.abort());
         const deadline = Date.now() + 10000;
         while (uploadControllers.current.size > 0 && Date.now() < deadline) {
@@ -1249,7 +1252,7 @@ function App() {
     }
   };
   if (!versionCheckComplete) return <main className="auth-shell"><section className="panel auth-panel update-required" role="status"><div className="brand">事件管理系統</div><h1>正在檢查系統更新</h1><p>正在確認系統版本及本機資料庫相容性，請稍候。</p></section></main>;
-  if (versionCheckError) return <main className="auth-shell"><section className="panel auth-panel update-required" role="alert"><div className="brand">事件管理系統</div><h1>無法安全檢查本機資料庫</h1><p>{versionCheckError}</p><p>為避免資料結構不相容或意外遺失，本系統暫停使用。請關閉其他已開啟的系統分頁後重新載入。</p><button className="full" onClick={() => window.location.reload()}>重新檢查</button></section></main>;
+  if (versionCheckError) return <main className="auth-shell"><section className="panel auth-panel update-required" role="alert"><div className="brand">事件管理系統</div><h1>無法安全檢查本機資料庫</h1><p>{versionCheckError}</p><p>為避免資料結構不相容或意外遺失，本系統暫停使用。請依照上方提示更新瀏覽器或關閉其他已開啟的系統分頁後重新載入。</p><button className="full" onClick={() => window.location.reload()}>重新檢查</button></section></main>;
   if (schemaUpdateRequired) return <main className="schema-update-shell" role="dialog" aria-modal="true" aria-labelledby="schema-update-title"><section className="schema-update-modal"><div className="schema-update-eyebrow">必要的資料庫結構更新</div><div className="brand">事件管理系統</div><h1 id="schema-update-title">確認更新並重建本機資料庫</h1><p>偵測到新版本需要不同的 IndexedDB 結構。為避免舊資料與新結構衝突，必須先清除本機資料庫，再更新系統並重新建立所需資料表。</p><div className="schema-version-row"><span>目前本機資料庫版本</span><strong>{localDbVersion}</strong><span>新版本要求</span><strong>{serverDbSchemaVersion}</strong></div><section className="schema-update-detail"><h2>本次更新內容</h2><p>{updateSummary}</p></section><section className="schema-update-warning"><h2>風險及會清除的資料</h2><p>{updateRisks}</p><ul><li>尚未上傳的本機暫存事件、上傳隊列及其附件會永久刪除。</li><li>本機保存的打印機偏好與事件流水號亦會清除；更新後會重新建立空白資料庫。</li><li>已上傳到後台的工作記錄與附件不受影響；本操作不會刪除伺服器資料。</li></ul></section><p className="schema-update-final-warning">此操作無法復原。只有按下「確認更新並清除本機資料」後，系統才會清除 IndexedDB、更新程式快取並重新載入。</p><button className="full schema-update-confirm" disabled={forceUpdating} onClick={() => void forceRefresh()}>{forceUpdating ? <><span className="loading-spinner" aria-hidden="true" />正在清除本機資料並更新…</> : '確認更新並清除本機資料'}</button>{message && <p className="notice">{message}</p>}</section></main>;
   if (updateRequired) return <main className="auth-shell"><section className="panel auth-panel update-required" role="alert"><div className="brand">事件管理系統</div><h1>需要更新系統</h1><p>伺服器已更新至 v{serverVersion}，目前裝置仍在使用 v{APP_VERSION}。為確保功能及資料相容，請先更新再繼續使用。</p><p className="version-label">環境：{displayedEnvironment}</p><button className="full" disabled={forceUpdating} onClick={() => void forceRefresh()}>{forceUpdating ? '正在清理程式快取並重新載入…' : '立即強制更新並重新載入'}</button>{message && <p className="notice">{message}</p>}</section></main>;
   if (!user) return <><div className={`remote-status ${remoteOnline ? 'online' : 'offline'}`} role="status"><span className="remote-light" />{remoteOnline ? '遠端已連線' : '遠端未連線'} </div><main className="auth-shell"><section className="panel auth-panel"><div className="brand">事件管理系統</div><small className="version-label">v{displayedVersion} · {displayedEnvironment}</small>

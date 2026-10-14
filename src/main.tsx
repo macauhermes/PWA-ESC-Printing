@@ -469,7 +469,7 @@ function App() {
           }
           return;
         }
-        const targetSchemaVersion = Math.max(1, Number(versionInfo.localDbSchemaVersion || LOCAL_DB_SCHEMA_VERSION));
+        const targetSchemaVersion = Math.max(1, Number(versionInfo.localDbSchemaVersion) || LOCAL_DB_SCHEMA_VERSION);
         const schemaMismatch = databaseInfo.exists && databaseInfo.version !== targetSchemaVersion;
         const versionMismatch = versionInfo.version !== APP_VERSION || versionInfo.environment !== BUILD_ENVIRONMENT;
         if (active) {
@@ -525,7 +525,7 @@ function App() {
     }).catch(() => {});
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   }, [token, user, versionCheckComplete, updateRequired, versionCheckError]);
-  useEffect(() => { if (!versionCheckComplete || updateRequired || versionCheckError) return; loadLocalDrafts().then(async drafts => { let normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); const missing = normalized.filter(draft => draft.syncStatus === 'queued' && !(Number(draft.uploadDispatchSeq) > 0)).sort((a,b) => a.createdAt.localeCompare(b.createdAt)); for (const draft of missing) { draft.uploadDispatchSeq = await nextUploadDispatchSequence(); } localDraftsRef.current = normalized; setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index] || missing.includes(draft)).map(draft => saveLocalDraft(draft).catch(() => {}))); window.setTimeout(() => startNextQueuedUpload(), 0); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, [versionCheckComplete, updateRequired, versionCheckError]);
+  useEffect(() => { if (!versionCheckComplete || updateRequired || versionCheckError) return; loadLocalDrafts().then(async drafts => { let normalized = drafts.map(draft => draft.syncStatus === 'uploading' ? { ...draft, syncStatus:'queued' as const } : draft); const missing = normalized.filter(draft => draft.syncStatus === 'queued' && !(Number(draft.uploadDispatchSeq) > 0)).sort((a,b) => a.createdAt.localeCompare(b.createdAt)); for (const draft of missing) { draft.uploadDispatchSeq = await nextUploadDispatchSequence(); } localDraftsRef.current = normalized; setLocalDrafts(normalized); void Promise.all(normalized.filter((draft,index) => draft !== drafts[index] || missing.includes(draft)).map(draft => saveLocalDraft(draft).catch(() => {}))); }).catch(() => setMessage('讀取手機暫存失敗，請檢查瀏覽器儲存空間。')); }, [versionCheckComplete, updateRequired, versionCheckError]);
   useEffect(() => {
     let active = true;
     const refreshStorageInfo = async () => {

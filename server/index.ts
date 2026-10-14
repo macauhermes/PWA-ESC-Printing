@@ -25,6 +25,9 @@ const app = express();
 const port = Number(process.env.PORT || 8787);
 const appVersion = String(process.env.APP_VERSION || (JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'package.json'), 'utf8')) as { version?: string }).version || '0.1.1');
 const appEnvironment = String(process.env.APP_ENV || (process.env.NODE_ENV === 'production' ? 'production' : 'test'));
+const localDbSchemaVersion = Math.max(1, Number(process.env.LOCAL_DB_SCHEMA_VERSION || 2));
+const appUpdateSummary = String(process.env.APP_UPDATE_SUMMARY || '本次更新加入本機 IndexedDB 結構版本檢查、全螢幕確認及資料庫重建流程。');
+const appUpdateRisks = String(process.env.APP_UPDATE_RISKS || '確認後會永久清除本機 IndexedDB 中的暫存事件、上傳隊列、附件、打印機偏好及本機流水號。尚未上傳的事件與附件無法復原；已上傳到後台的工作記錄及附件不受影響。')
 const origin = process.env.APP_ORIGIN || 'http://localhost:5173';
 const rpID = process.env.RP_ID || new URL(origin).hostname;
 const rpName = process.env.RP_NAME || 'PWA ESC Printing';
@@ -95,7 +98,7 @@ const takeChallenge = (cid: string, kind: string) => {
 };
 
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'PWA ESC Printing API' }));
-app.get('/api/version', (_req, res) => res.set('Cache-Control', 'no-store').json({ version: appVersion, environment: appEnvironment }));
+app.get('/api/version', (_req, res) => res.set('Cache-Control', 'no-store').json({ version: appVersion, environment: appEnvironment, localDbSchemaVersion, updateSummary: appUpdateSummary, updateRisks: appUpdateRisks }));
 app.get('/api/config', (_req, res) => res.json({ rpName, rpID, origin, vapidPublicKey: process.env.VAPID_PUBLIC_KEY || '' }));
 
 // Public passkey enrollment for ordinary users. The env-configured administrator is password-only.

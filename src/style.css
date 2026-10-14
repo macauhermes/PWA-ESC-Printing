@@ -327,3 +327,24 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;}body{overscroll-be
 .notification-subscription-actions{display:flex;align-items:stretch;justify-content:flex-start;gap:8px;flex-wrap:wrap}
 .notification-subscription-actions button{flex:1 1 0;min-width:0;min-height:42px;padding:11px 10px;display:inline-flex;align-items:center;justify-content:center;white-space:normal}
 @media(max-width:600px){.notification-subscription-actions{align-items:stretch;flex-direction:row;justify-content:flex-start;flex-wrap:nowrap}.notification-subscription-actions button{width:0;max-width:none;flex:1 1 0;min-height:42px;padding:11px 6px;font-size:14px}}
+
+
+/* Full-screen confirmation required before a schema-changing release clears local IndexedDB. */
+.schema-update-shell{position:fixed;inset:0;z-index:10000;display:flex;align-items:stretch;justify-content:center;overflow-y:auto;background:rgba(15,23,42,.82);overscroll-behavior:contain}
+.schema-update-modal{box-sizing:border-box;width:100%;min-height:100dvh;padding:clamp(20px,4vw,48px);background:#fff;color:#172033;overflow-y:auto}
+.schema-update-modal>.brand{font-size:20px;font-weight:800;color:#172033;margin:0 0 18px}
+.schema-update-eyebrow{display:inline-flex;align-items:center;margin:0 0 12px;padding:6px 10px;border-radius:999px;background:#fff1f2;color:#9f1239;font-size:12px;font-weight:800;letter-spacing:.02em}
+.schema-update-modal h1{max-width:900px;margin:0 0 12px;font-size:clamp(24px,4vw,36px);line-height:1.25;color:#111827}
+.schema-update-modal>p{max-width:900px;color:#475569;line-height:1.75}
+.schema-version-row{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto;align-items:center;gap:8px 14px;max-width:900px;margin:20px 0;padding:14px 16px;border:1px solid #dbe3ee;border-radius:12px;background:#f8fafc;font-size:13px}
+.schema-version-row span{color:#64748b}.schema-version-row strong{font-size:18px;color:#0f172a}
+.schema-update-detail,.schema-update-warning{max-width:900px;margin:14px 0;padding:16px 18px;border:1px solid #dbe3ee;border-radius:12px;background:#f8fafc}
+.schema-update-detail h2,.schema-update-warning h2{margin:0 0 8px;font-size:16px;color:#172033}
+.schema-update-detail p,.schema-update-warning p{margin:0;color:#475569;line-height:1.7;overflow-wrap:anywhere}
+.schema-update-warning{border-color:#fecaca;background:#fff7f7}
+.schema-update-warning h2{color:#991b1b}.schema-update-warning ul{margin:10px 0 0;padding-left:22px;color:#7f1d1d;line-height:1.7}
+.schema-update-modal .schema-update-final-warning{max-width:900px;color:#991b1b;font-weight:750}
+.schema-update-confirm{max-width:900px;min-height:50px;margin-top:8px;background:#b91c1c!important;color:#fff!important;border-color:#b91c1c!important;font-weight:800}
+.schema-update-confirm:disabled{opacity:.7;cursor:wait}
+@media(min-width:900px){.schema-update-shell{align-items:center;padding:24px;box-sizing:border-box}.schema-update-modal{width:min(100%,980px);min-height:0;max-height:calc(100dvh - 48px);border-radius:18px;box-shadow:0 28px 90px rgba(0,0,0,.35)}}
+@media(max-width:520px){.schema-version-row{grid-template-columns:minmax(0,1fr) auto;gap:8px 12px}.schema-update-modal{padding:24px 18px max(24px,env(safe-area-inset-bottom))}.schema-update-modal h1{font-size:25px}}

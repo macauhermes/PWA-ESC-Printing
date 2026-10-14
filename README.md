@@ -27,6 +27,7 @@
 ## 功能
 
 - 登入頁、一般用戶及管理員後台均顯示系統版本與環境（測試環境／正式環境）。前端每 5 秒檢查伺服器版本及環境；如版本或環境不一致，會阻擋繼續使用並要求強制重新載入。每次功能更新均須同步遞增 `package.json` 與 `package-lock.json` 的版本號，並以相同版本建置／部署前端與伺服器；客戶端心跳會回報版本及環境，管理員可在「客戶端狀態」查看各客戶端現時版本及是否需要更新。測試環境可設定 `VITE_APP_ENV=test` 及伺服器 `APP_ENV=test`，正式環境使用 `APP_ENV=production`。
+- 若伺服器回報的 `LOCAL_DB_SCHEMA_VERSION` 與裝置現有 IndexedDB 版本不同，系統會顯示全螢幕確認視窗，列明本次更新內容、資料遺失風險及版本差異；只有按下「確認更新並清除本機資料」後，才會清除整個本機 IndexedDB、清理 Service Worker／快取並重新載入，以便新版本重建資料庫。一般版本更新及單純快取清理不會刪除 IndexedDB。尚未上傳的事件、附件、打印機偏好及本機流水號會永久清除；已上傳至後台的記錄不受影響。
 
 - 安裝式 PWA manifest 與 Service Worker。
 - 一般用戶在單一「打印」頁重複選取／切換 BLE 裝置、連接 GATT 可寫入 characteristic，並打印較完整的雙欄模擬付款測試收據；可輸入備註，備註會打印在收據上。
@@ -79,6 +80,8 @@ npm run dev
 - `RP_ID`: 該網站網域名稱，不包含 scheme 或 port。
 - `SESSION_SECRET`: 請設為高熵隨機值（目前 session token 使用 SHA-256 雜湊存入 DB）。
 - `ADMIN_USERNAME` 與 `ADMIN_PASSWORD`: 唯一管理員的固定登入憑證，僅放在伺服器環境變數，不要放入前端程式或提交真實 `.env` 到 GitHub。
+- `LOCAL_DB_SCHEMA_VERSION`: IndexedDB 結構版本；只有本機資料庫 schema 確實變更時才遞增，並同步修改 `src/main.tsx` 的 `LOCAL_DB_SCHEMA_VERSION`。兩端版本不一致會觸發全螢幕資料清除確認。
+- `APP_UPDATE_SUMMARY` 與 `APP_UPDATE_RISKS`: 供全螢幕更新確認視窗顯示的本次更新內容及風險。每次發佈前，應按實際變更更新這兩項伺服器環境變數。
 - 設定反向代理 HTTPS、備份 SQLite 及 uploads，限制管理端點的網路存取。
 
 手機用戶在「事件管理」可為每個事件選擇多張圖片或多段影片。按「暫存於手機」會把事件文字和媒體 Blob 保存在 IndexedDB，按「上傳事件及附件」或「直接上傳」才會提交伺服器；上傳成功後，手機草稿才會移除。清除網站資料或更換瀏覽器／設備仍可能導致本機草稿遺失。伺服器接受每個事件最多 20 個媒體檔案、單檔最大 500 MiB（約 524 MB）；部署時請確認反向代理（例如 Nginx 的 `client_max_body_size`）、磁碟空間及網絡限制允許相應大小。瀏覽器 IndexedDB 暫存 Blob 不會把影片傳送到伺服器，立即完成暫存不代表影片已上傳。管理員可在「設備工作記錄」獨立頁查看所有設備工作記錄及媒體連結，並刪除記錄；客戶端每 3 秒重新讀取自己的上傳清單，刪除後會同步更新。一般用戶的「打印」頁只會打印標示為非真實交易的模擬付款收據，並可把備註加入收據；管理員帳號不提供打印功能。
@@ -167,7 +170,7 @@ docker compose logs --tail=200 app
 | 方法 | 路徑 | 用途／主要回應 |
 | --- | --- | --- |
 | `GET` | `/health` | 健康檢查；回傳 `ok` 及服務名稱。 |
-| `GET` | `/version` | 回傳前端比對版本用的 `version` 及 `environment`；使用 `Cache-Control: no-store`。 |
+| `GET` | `/version` | 回傳 `version`、`environment`、`localDbSchemaVersion`、`updateSummary` 及 `updateRisks`；使用 `Cache-Control: no-store`。 |
 | `GET` | `/config` | 回傳 WebAuthn RP 名稱、RP ID、預期 Origin 及 VAPID 公開金鑰；不回傳 VAPID 私鑰。 |
 | `POST` | `/auth/register/options` | 產生 Passkey 註冊選項及 `challengeId`。JSON 包含 `username`、`employeeNumber`，以及可選的 `employeeName`、`contactPhone`、`contactEmail`。 |
 | `POST` | `/auth/register/verify` | 提交 `username`、`challengeId`、WebAuthn `response`，及可選的 `clientId` 完成註冊；成功回傳 `verified`、`clientId`、`deviceCode`。 |
